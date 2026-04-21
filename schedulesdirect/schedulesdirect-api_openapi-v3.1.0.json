@@ -65,9 +65,11 @@
   "paths": {
     "/token": {
       "post": {
-        "tags": ["Authentication"],
+        "tags": [
+          "Authentication"
+        ],
         "summary": "Obtain an authentication token",
-        "description": "This is the first call your client must make — almost all other endpoints require a token. Authenticates with username and SHA1-hashed password (lowercase hex, 40 characters). A token is valid for 24 hours from the time it was first granted. Subsequent calls with the same credentials during the 24-hour window return the existing token. A token becomes invalid when: (1) 24 hours elapse since it was first granted, or (2) a new token is explicitly requested via the `newToken` field. If the service is offline (code 3000), disconnect and retry in 30 minutes — a token may still be returned for later use. There is a limited number of token requests allowed per 24-hour period; once obtained, reuse the token until it expires.",
+        "description": "This is the first call your client must make \u00e2\u20ac\u201d almost all other endpoints require a token. Authenticates with username and SHA1-hashed password (lowercase hex, 40 characters). A token is valid for 24 hours from the time it was first granted. Subsequent calls with the same credentials during the 24-hour window return the existing token. A token becomes invalid when: (1) 24 hours elapse since it was first granted, or (2) a new token is explicitly requested via the `newToken` field. If the service is offline (code 3000), disconnect and retry in 30 minutes \u00e2\u20ac\u201d a token may still be returned for later use. There is a limited number of token requests allowed per 24-hour period; once obtained, reuse the token until it expires.",
         "security": [],
         "requestBody": {
           "required": true,
@@ -75,7 +77,10 @@
             "application/json": {
               "schema": {
                 "type": "object",
-                "required": ["username", "password"],
+                "required": [
+                  "username",
+                  "password"
+                ],
                 "properties": {
                   "username": {
                     "type": "string",
@@ -122,7 +127,9 @@
     },
     "/status": {
       "get": {
-        "tags": ["Status"],
+        "tags": [
+          "Status"
+        ],
         "summary": "Get account and system status",
         "description": "Returns account details (expiration, max lineups), subscribed lineups, last data update time, notifications, and system status.",
         "responses": {
@@ -151,7 +158,9 @@
     },
     "/ip_isblocked": {
       "get": {
-        "tags": ["Status"],
+        "tags": [
+          "Status"
+        ],
         "summary": "Check if IP is blocked on load balancer",
         "description": "Checks whether the client IP is blocked. Rate limited to 100 calls per 24 hours (resets at 00:00Z).",
         "security": [],
@@ -181,7 +190,9 @@
     },
     "/version/{clientName}": {
       "get": {
-        "tags": ["Status"],
+        "tags": [
+          "Status"
+        ],
         "summary": "Check latest version of a registered client",
         "description": "Returns the latest known version for a registered client application.",
         "security": [],
@@ -247,7 +258,9 @@
     },
     "/available": {
       "get": {
-        "tags": ["Available"],
+        "tags": [
+          "Available"
+        ],
         "summary": "Get available service types",
         "description": "Returns the list of available service types (countries, languages, DVB-S satellites, etc.) with their URIs.",
         "security": [],
@@ -270,7 +283,9 @@
     },
     "/available/countries": {
       "get": {
-        "tags": ["Available"],
+        "tags": [
+          "Available"
+        ],
         "summary": "Get available countries",
         "description": "Returns countries grouped by region, including postal code patterns for headend lookups.",
         "security": [],
@@ -296,7 +311,9 @@
     },
     "/available/languages": {
       "get": {
-        "tags": ["Available"],
+        "tags": [
+          "Available"
+        ],
         "summary": "Get available languages",
         "description": "Returns a list of language digraphs and their language names.",
         "security": [],
@@ -320,17 +337,20 @@
     },
     "/available/dvb-s": {
       "get": {
-        "tags": ["Available"],
+        "tags": [
+          "Available"
+        ],
         "summary": "Get available DVB-S satellites",
-        "description": "Returns a list of satellites available for DVB-S lineups.",
+        "description": "Returns available DVB-S satellites. Response is an array; returns an empty array for accounts without DVB-S coverage (e.g. North American accounts). DVB-S is a European/international satellite standard.",
         "security": [],
         "responses": {
           "200": {
-            "description": "Satellites returned",
+            "description": "DVB-S satellite list (empty array if no coverage for the account region)",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object"
+                  "type": "array",
+                  "items": {}
                 }
               }
             }
@@ -340,9 +360,11 @@
     },
     "/transmitters/{iso3166alpha3}": {
       "get": {
-        "tags": ["Available"],
+        "tags": [
+          "Available"
+        ],
         "summary": "Get DVB-T transmitters for a country",
-        "description": "Returns a map of transmitter names to lineup IDs for the specified country (DVB-T only).",
+        "description": "Returns a map of transmitter names to lineup IDs for the specified country. DVB-T (Freeview) infrastructure only. Supported countries are declared by the service via GET /available \u00e2\u20ac\u201d currently GBR only. Returns 403/2050 INVALID_PARAMETER:COUNTRY for unsupported countries; response body includes the allowed country set.",
         "security": [],
         "parameters": [
           {
@@ -372,13 +394,25 @@
                 }
               }
             }
+          },
+          "403": {
+            "description": "Country not supported for this account context (code 2050 INVALID_PARAMETER:COUNTRY)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
     },
     "/headends": {
       "get": {
-        "tags": ["Lineups"],
+        "tags": [
+          "Lineups"
+        ],
         "summary": "Get headends for a postal code",
         "description": "Returns available headends (cable, satellite, antenna, etc.) for the specified country and postal code.",
         "parameters": [
@@ -424,7 +458,9 @@
     },
     "/lineups/preview/{lineupId}": {
       "get": {
-        "tags": ["Lineups"],
+        "tags": [
+          "Lineups"
+        ],
         "summary": "Preview a lineup before adding",
         "description": "Returns a preview of channels in a lineup without adding it to the account.",
         "parameters": [
@@ -458,7 +494,9 @@
     },
     "/lineups/{lineupId}": {
       "get": {
-        "tags": ["Lineups"],
+        "tags": [
+          "Lineups"
+        ],
         "summary": "Get lineup channel mapping",
         "description": "Returns the full channel-to-stationID mapping, station details, and metadata for a lineup already added to the account. Use the `verboseMap: true` header for additional digital transport data.",
         "parameters": [
@@ -479,7 +517,9 @@
             "description": "Set to 'true' for additional data on digital transports (providerCallsign, logicalChannelNumber, matchType)",
             "schema": {
               "type": "string",
-              "enum": ["true"]
+              "enum": [
+                "true"
+              ]
             }
           }
         ],
@@ -497,7 +537,9 @@
         }
       },
       "put": {
-        "tags": ["Lineups"],
+        "tags": [
+          "Lineups"
+        ],
         "summary": "Add a lineup to the account",
         "description": "Adds a lineup to the user's account. Limited to 6 adds per 24-hour period. Default maximum of 4 lineups per account (can be increased via support).",
         "parameters": [
@@ -526,7 +568,9 @@
         }
       },
       "delete": {
-        "tags": ["Lineups"],
+        "tags": [
+          "Lineups"
+        ],
         "summary": "Remove a lineup from the account",
         "description": "Removes a lineup from the user's account.",
         "parameters": [
@@ -557,7 +601,9 @@
     },
     "/lineups": {
       "get": {
-        "tags": ["Lineups"],
+        "tags": [
+          "Lineups"
+        ],
         "summary": "Get all lineups on the account",
         "description": "Returns all lineups currently added to the user's account.",
         "responses": {
@@ -576,7 +622,9 @@
     },
     "/programs": {
       "post": {
-        "tags": ["Programs"],
+        "tags": [
+          "Programs"
+        ],
         "summary": "Get program details (batch)",
         "description": "Returns detailed metadata for up to 5000 program IDs per request.",
         "requestBody": {
@@ -592,7 +640,10 @@
                 },
                 "maxItems": 5000
               },
-              "example": ["EP012801050074", "MV008961210000"]
+              "example": [
+                "EP012801050074",
+                "MV008961210000"
+              ]
             }
           }
         },
@@ -615,7 +666,9 @@
     },
     "/metadata/description/": {
       "post": {
-        "tags": ["Programs"],
+        "tags": [
+          "Programs"
+        ],
         "summary": "Get generic program descriptions",
         "description": "Returns short (100-char) and long (1000-char) generic descriptions for EP-type program IDs. The response keys are the corresponding SH-prefix base IDs. Max 500 per request.",
         "requestBody": {
@@ -630,7 +683,10 @@
                 },
                 "maxItems": 500
               },
-              "example": ["EP000000060011", "EP000186930001"]
+              "example": [
+                "EP000000060011",
+                "EP000186930001"
+              ]
             }
           }
         },
@@ -653,7 +709,9 @@
     },
     "/xref": {
       "post": {
-        "tags": ["Programs"],
+        "tags": [
+          "Programs"
+        ],
         "summary": "Get language cross-references for programs",
         "description": "Returns available language versions of the specified program IDs.",
         "requestBody": {
@@ -667,7 +725,10 @@
                   "description": "14-character programID"
                 }
               },
-              "example": ["EP000000060013", "EP006883590001"]
+              "example": [
+                "EP000000060013",
+                "EP006883590001"
+              ]
             }
           }
         },
@@ -693,7 +754,9 @@
     },
     "/schedules": {
       "post": {
-        "tags": ["Schedules"],
+        "tags": [
+          "Schedules"
+        ],
         "summary": "Get schedules for stations",
         "description": "Returns program schedules for the specified station IDs and optional date ranges. Max 5000 station IDs per request.",
         "requestBody": {
@@ -729,7 +792,9 @@
     },
     "/schedules/md5": {
       "post": {
-        "tags": ["Schedules"],
+        "tags": [
+          "Schedules"
+        ],
         "summary": "Get schedule MD5 hashes for change detection",
         "description": "Returns MD5 hashes and last-modified timestamps for schedules, enabling clients to detect changes without downloading full schedules. Max 5000 station IDs per request.",
         "requestBody": {
@@ -768,29 +833,40 @@
     },
     "/metadata/stillRunning/{programId}": {
       "get": {
-        "tags": ["Sports"],
+        "tags": [
+          "Sports"
+        ],
         "summary": "Check if a sports event is still in progress",
-        "description": "Returns the live status and current score for an in-progress sporting event. Supports NFL, NHL, NBA, and MLB.",
+        "description": "Returns the live status and current score for an in-progress sporting event. Supports NFL, NHL, NBA, and MLB (as of 2015-11-28). Response codes: 0=OK (in progress or complete), 6001=PROGRAMID_QUEUED (retry in 30s), 6002=FUTURE_PROGRAM, 6000=INVALID_PROGRAMID (untracked sport or invalid ID). NOTE: empirically tested with valid NHL playoff game program IDs during a live game (2026-04-20) \u00e2\u20ac\u201d both returned HTTP 404 text/html rather than the documented JSON responses. Endpoint behavior may have drifted from documentation. Do not rely on this endpoint without live validation.",
         "parameters": [
           {
             "name": "programId",
             "in": "path",
             "required": true,
-            "description": "SP-type programID for the sporting event",
+            "description": "programID for the sporting event. Wiki examples use SP-prefix but docs do not restrict by prefix.",
             "schema": {
-              "type": "string",
-              "pattern": "^SP\\d{12}$"
+              "type": "string"
             },
             "example": "SP003190180000"
           }
         ],
         "responses": {
           "200": {
-            "description": "Event status returned",
+            "description": "Event status returned (codes 0, 6000, 6001, 6002 all return HTTP 200 per documentation)",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SportsStatusResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Empirically observed \u00e2\u20ac\u201d returns text/html 404 for valid sports event program IDs. Not documented in SD wiki. Behavior unresolved.",
+            "content": {
+              "text/html": {
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -800,9 +876,11 @@
     },
     "/metadata/programs/{programId}": {
       "get": {
-        "tags": ["Images"],
+        "tags": [
+          "Images"
+        ],
         "summary": "Get image metadata for a single program",
-        "description": "Returns available image metadata (URIs, dimensions, categories) for a single program ID or rootId. To receive episode-specific artwork (hasEpisodeArtwork), movie artwork (hasMovieArtwork), or sports artwork (hasSportsArtwork), send the full 14-character programID. Sending only the left-most 10 characters is deprecated and will return series-level artwork only. The response may include a rootId field that can be used to retrieve related artwork via this same endpoint. URIs in the response are ephemeral — do not store them permanently.",
+        "description": "Returns available image metadata (URIs, dimensions, categories) for a single program ID or rootId. To receive episode-specific artwork (hasEpisodeArtwork), movie artwork (hasMovieArtwork), or sports artwork (hasSportsArtwork), send the full 14-character programID. Sending only the left-most 10 characters is deprecated and will return series-level artwork only. The response may include a rootId field that can be used to retrieve related artwork via this same endpoint. URIs in the response are ephemeral \u00e2\u20ac\u201d do not store them permanently.",
         "parameters": [
           {
             "name": "programId",
@@ -834,9 +912,11 @@
     },
     "/metadata/programs/": {
       "post": {
-        "tags": ["Images"],
+        "tags": [
+          "Images"
+        ],
         "summary": "Get image metadata for multiple programs (batch)",
-        "description": "Returns image metadata for up to 500 program IDs. Use full 14-character program IDs — sending the left-most 10 characters is deprecated and will return only series-level artwork, not episode-specific images. Each element in the response is JSON, but note that when errors occur (e.g., invalid programID), the error response for that element is inline alongside successful results. URIs in the response are ephemeral — do not store them permanently.",
+        "description": "Returns image metadata for up to 500 program IDs. Use full 14-character program IDs \u00e2\u20ac\u201d sending the left-most 10 characters is deprecated and will return only series-level artwork, not episode-specific images. Each element in the response is JSON, but note that when errors occur (e.g., invalid programID), the error response for that element is inline alongside successful results. URIs in the response are ephemeral \u00e2\u20ac\u201d do not store them permanently.",
         "requestBody": {
           "required": true,
           "content": {
@@ -849,7 +929,10 @@
                 },
                 "maxItems": 500
               },
-              "example": ["SH007122400000", "EP003851900001"]
+              "example": [
+                "SH007122400000",
+                "EP003851900001"
+              ]
             }
           }
         },
@@ -872,9 +955,11 @@
     },
     "/image/{uri}": {
       "get": {
-        "tags": ["Images"],
+        "tags": [
+          "Images"
+        ],
         "summary": "Get an image by URI",
-        "description": "Redirects (HTTP 303) to an S3 URL for the requested image. The redirect URL is valid for 120 seconds — do not cache it. Token can be provided via header or `?token=` query parameter. If the URI from the image metadata is already a complete S3 URL (contains 'https://'), access it directly instead of using this endpoint. There is a daily image download limit per subscriber (counter resets at 00:00Z). Exceeding it returns code 5002/5003 — stop requests immediately or the account will be blocked.",
+        "description": "Redirects (HTTP 303) to an S3 URL for the requested image. The redirect URL is valid for 120 seconds \u00e2\u20ac\u201d do not cache it. Token can be provided via header or `?token=` query parameter. If the URI from the image metadata is already a complete S3 URL (contains 'https://'), access it directly instead of using this endpoint. There is a daily image download limit per subscriber (counter resets at 00:00Z). Exceeding it returns code 5002/5003 \u00e2\u20ac\u201d stop requests immediately or the account will be blocked.",
         "parameters": [
           {
             "name": "uri",
@@ -915,9 +1000,11 @@
     },
     "/metadata/celebrity/{personId}": {
       "get": {
-        "tags": ["Celebrity"],
+        "tags": [
+          "Celebrity"
+        ],
         "summary": "Get images for a celebrity",
-        "description": "Returns available images for a celebrity by their personId. The personId is preferred over nameId — a person may have multiple nameIds (due to marriage, alternate spellings, etc.) but a single personId. Response may include rootId and title fields linking images back to specific programs. URIs in the response are ephemeral — do not store them permanently. Note: the Retrieving Images wiki page indicates token is not required for this endpoint, while the main API page indicates it is required. Behavior may vary — send the token if available.",
+        "description": "Returns available images for a celebrity by their personId. The personId is preferred over nameId \u00e2\u20ac\u201d a person may have multiple nameIds (due to marriage, alternate spellings, etc.) but a single personId. Response may include rootId and title fields linking images back to specific programs. URIs in the response are ephemeral \u00e2\u20ac\u201d do not store them permanently. Note: the Retrieving Images wiki page indicates token is not required for this endpoint, while the main API page indicates it is required. Behavior may vary \u00e2\u20ac\u201d send the token if available.",
         "parameters": [
           {
             "name": "personId",
@@ -950,7 +1037,9 @@
     },
     "/celebrity/{personId}": {
       "get": {
-        "tags": ["Celebrity"],
+        "tags": [
+          "Celebrity"
+        ],
         "summary": "Get celebrity biographical details",
         "description": "Returns full biographical data for a celebrity including names, mediography, awards, and images. PersonId values must be treated as strings, not integers.",
         "parameters": [
@@ -992,7 +1081,9 @@
     },
     "/messages/{messageId}": {
       "delete": {
-        "tags": ["Messages"],
+        "tags": [
+          "Messages"
+        ],
         "summary": "Delete a message",
         "description": "Removes a non-system message from the account status response.",
         "parameters": [
@@ -1058,7 +1149,10 @@
       },
       "ErrorResponse": {
         "type": "object",
-        "required": ["response", "code"],
+        "required": [
+          "response",
+          "code"
+        ],
         "properties": {
           "response": {
             "type": "string",
@@ -1189,7 +1283,9 @@
       },
       "TokenResponse": {
         "allOf": [
-          { "$ref": "#/components/schemas/BaseResponse" },
+          {
+            "$ref": "#/components/schemas/BaseResponse"
+          },
           {
             "type": "object",
             "properties": {
@@ -1323,7 +1419,12 @@
           "type": {
             "type": "string",
             "description": "Service type identifier",
-            "enum": ["COUNTRIES", "LANGUAGES", "DVB-S", "DVB-T"]
+            "enum": [
+              "COUNTRIES",
+              "LANGUAGES",
+              "DVB-S",
+              "DVB-T"
+            ]
           },
           "description": {
             "type": "string"
@@ -1372,7 +1473,15 @@
           "transport": {
             "type": "string",
             "description": "Delivery transport type",
-            "enum": ["Antenna", "Cable", "DVB-C", "DVB-S", "DVB-T", "IPTV", "Satellite"]
+            "enum": [
+              "Antenna",
+              "Cable",
+              "DVB-C",
+              "DVB-S",
+              "DVB-T",
+              "IPTV",
+              "Satellite"
+            ]
           },
           "location": {
             "type": "string"
@@ -1446,7 +1555,10 @@
       },
       "ChannelMap": {
         "type": "object",
-        "required": ["stationID", "channel"],
+        "required": [
+          "stationID",
+          "channel"
+        ],
         "properties": {
           "stationID": {
             "type": "string",
@@ -1554,14 +1666,18 @@
             "items": {
               "type": "string"
             },
-            "example": ["en"]
+            "example": [
+              "en"
+            ]
           },
           "descriptionLanguage": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "example": ["en"]
+            "example": [
+              "en"
+            ]
           },
           "broadcaster": {
             "$ref": "#/components/schemas/Broadcaster"
@@ -1579,6 +1695,10 @@
             "type": "object",
             "deprecated": true,
             "description": "Legacy single logo object. Use stationLogo array instead."
+          },
+          "URL": {
+            "type": "string",
+            "description": "Station website URL. Present on some stations."
           }
         }
       },
@@ -1626,9 +1746,22 @@
             "example": "Gracenote"
           },
           "category": {
-            "type": ["string", "null"],
-            "enum": ["dark", "gray", "light", "white", null],
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "dark",
+              "gray",
+              "light",
+              "white",
+              null
+            ],
             "description": "Background color category the logo is designed for. May be null for legacy logos."
+          },
+          "hash": {
+            "type": "string",
+            "description": "32-character hash of the logo image."
           }
         }
       },
@@ -1645,7 +1778,15 @@
           },
           "transport": {
             "type": "string",
-            "enum": ["Antenna", "Cable", "DVB-C", "DVB-S", "DVB-T", "IPTV", "Satellite"]
+            "enum": [
+              "Antenna",
+              "Cable",
+              "DVB-C",
+              "DVB-S",
+              "DVB-T",
+              "IPTV",
+              "Satellite"
+            ]
           },
           "modulation": {
             "type": "string",
@@ -1656,14 +1797,20 @@
       },
       "LineupChangeResponse": {
         "allOf": [
-          { "$ref": "#/components/schemas/BaseResponse" },
+          {
+            "$ref": "#/components/schemas/BaseResponse"
+          },
           {
             "type": "object",
             "properties": {
               "changesRemaining": {
                 "oneOf": [
-                  { "type": "integer" },
-                  { "type": "string" }
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
                 ],
                 "description": "Number of lineup changes remaining in the current period",
                 "example": 254
@@ -1706,7 +1853,15 @@
           },
           "transport": {
             "type": "string",
-            "enum": ["Antenna", "Cable", "DVB-C", "DVB-S", "DVB-T", "IPTV", "Satellite"]
+            "enum": [
+              "Antenna",
+              "Cable",
+              "DVB-C",
+              "DVB-S",
+              "DVB-T",
+              "IPTV",
+              "Satellite"
+            ]
           },
           "location": {
             "type": "string",
@@ -1723,7 +1878,11 @@
       },
       "Program": {
         "type": "object",
-        "required": ["programID", "titles", "md5"],
+        "required": [
+          "programID",
+          "titles",
+          "md5"
+        ],
         "properties": {
           "programID": {
             "type": "string",
@@ -1758,10 +1917,25 @@
           "entityType": {
             "type": "string",
             "enum": [
-              "Compilation", "Episode", "Highlights", "Miniseries", "Movie",
-              "Music Video", "Off Air", "Paid Program", "Preview", "Series",
-              "Short Film", "Show", "Special", "Sport Event",
-              "Sport-Related Episode", "Sports", "TBA", "Team Event", "Trailer",
+              "Compilation",
+              "Episode",
+              "Highlights",
+              "Miniseries",
+              "Movie",
+              "Music Video",
+              "Off Air",
+              "Paid Program",
+              "Preview",
+              "Series",
+              "Short Film",
+              "Show",
+              "Special",
+              "Sport Event",
+              "Sport-Related Episode",
+              "Sports",
+              "TBA",
+              "Team Event",
+              "Trailer",
               "TV Movie"
             ]
           },
@@ -1805,13 +1979,48 @@
           "keyWords": {
             "type": "object",
             "properties": {
-              "Mood": { "type": "array", "items": { "type": "string" } },
-              "Time Period": { "type": "array", "items": { "type": "string" } },
-              "Theme": { "type": "array", "items": { "type": "string" } },
-              "Character": { "type": "array", "items": { "type": "string" } },
-              "Setting": { "type": "array", "items": { "type": "string" } },
-              "Subject": { "type": "array", "items": { "type": "string" } },
-              "General": { "type": "array", "items": { "type": "string" } }
+              "Mood": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "Time Period": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "Theme": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "Character": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "Setting": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "Subject": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "General": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           },
           "metadata": {
@@ -1889,7 +2098,9 @@
       },
       "ProgramTitle": {
         "type": "object",
-        "required": ["title120"],
+        "required": [
+          "title120"
+        ],
         "properties": {
           "title120": {
             "type": "string",
@@ -1920,7 +2131,10 @@
       },
       "DescriptionEntry": {
         "type": "object",
-        "required": ["descriptionLanguage", "description"],
+        "required": [
+          "descriptionLanguage",
+          "description"
+        ],
         "properties": {
           "descriptionLanguage": {
             "type": "string"
@@ -1932,7 +2146,11 @@
       },
       "CastMember": {
         "type": "object",
-        "required": ["billingOrder", "role", "name"],
+        "required": [
+          "billingOrder",
+          "role",
+          "name"
+        ],
         "properties": {
           "billingOrder": {
             "type": "string"
@@ -1959,7 +2177,11 @@
       },
       "CrewMember": {
         "type": "object",
-        "required": ["billingOrder", "role", "name"],
+        "required": [
+          "billingOrder",
+          "role",
+          "name"
+        ],
         "properties": {
           "billingOrder": {
             "type": "string"
@@ -2208,7 +2430,9 @@
       },
       "ScheduleRequest": {
         "type": "object",
-        "required": ["stationID"],
+        "required": [
+          "stationID"
+        ],
         "properties": {
           "stationID": {
             "type": "string",
@@ -2277,7 +2501,12 @@
       },
       "ScheduledProgram": {
         "type": "object",
-        "required": ["programID", "airDateTime", "duration", "md5"],
+        "required": [
+          "programID",
+          "airDateTime",
+          "duration",
+          "md5"
+        ],
         "properties": {
           "programID": {
             "type": "string"
@@ -2299,7 +2528,11 @@
           },
           "liveTapeDelay": {
             "type": "string",
-            "enum": ["Live", "Tape", "Delay"]
+            "enum": [
+              "Live",
+              "Tape",
+              "Delay"
+            ]
           },
           "isPremiereOrFinale": {
             "type": "string",
@@ -2309,14 +2542,34 @@
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["Atmos", "cc", "DD", "DD 5.1", "Dolby", "dubbed", "dvs", "SAP", "stereo", "subtitled", "surround"]
+              "enum": [
+                "Atmos",
+                "cc",
+                "DD",
+                "DD 5.1",
+                "Dolby",
+                "dubbed",
+                "dvs",
+                "SAP",
+                "stereo",
+                "subtitled",
+                "surround"
+              ]
             }
           },
           "videoProperties": {
             "type": "array",
             "items": {
               "type": "string",
-              "enum": ["3d", "enhanced", "hdtv", "hdr", "letterbox", "sdtv", "uhdtv"]
+              "enum": [
+                "3d",
+                "enhanced",
+                "hdtv",
+                "hdr",
+                "letterbox",
+                "sdtv",
+                "uhdtv"
+              ]
             }
           },
           "ratings": {
@@ -2328,19 +2581,49 @@
           "multiPart": {
             "$ref": "#/components/schemas/Multipart"
           },
-          "cableInTheClassroom": { "type": "boolean" },
-          "catchup": { "type": "boolean" },
-          "continued": { "type": "boolean" },
-          "educational": { "type": "boolean" },
-          "joinedInProgress": { "type": "boolean" },
-          "leftInProgress": { "type": "boolean" },
-          "premiere": { "type": "boolean", "description": "Movies/Miniseries only" },
-          "programBreak": { "type": "boolean" },
-          "repeat": { "type": "boolean", "description": "Encore of sporting event" },
-          "signed": { "type": "boolean", "description": "On-screen sign-language translation" },
-          "subjectToBlackout": { "type": "boolean" },
-          "timeApproximate": { "type": "boolean" },
-          "free": { "type": "boolean", "description": "Normally paid content available free in this instance" }
+          "cableInTheClassroom": {
+            "type": "boolean"
+          },
+          "catchup": {
+            "type": "boolean"
+          },
+          "continued": {
+            "type": "boolean"
+          },
+          "educational": {
+            "type": "boolean"
+          },
+          "joinedInProgress": {
+            "type": "boolean"
+          },
+          "leftInProgress": {
+            "type": "boolean"
+          },
+          "premiere": {
+            "type": "boolean",
+            "description": "Movies/Miniseries only"
+          },
+          "programBreak": {
+            "type": "boolean"
+          },
+          "repeat": {
+            "type": "boolean",
+            "description": "Encore of sporting event"
+          },
+          "signed": {
+            "type": "boolean",
+            "description": "On-screen sign-language translation"
+          },
+          "subjectToBlackout": {
+            "type": "boolean"
+          },
+          "timeApproximate": {
+            "type": "boolean"
+          },
+          "free": {
+            "type": "boolean",
+            "description": "Normally paid content available free in this instance"
+          }
         }
       },
       "ScheduleRating": {
@@ -2377,6 +2660,10 @@
           "isDeleted": {
             "type": "boolean",
             "description": "True if the stationID has been deleted upstream"
+          },
+          "modifiedEpoch": {
+            "type": "integer",
+            "description": "Unix epoch timestamp of last modification. Accompanies modified."
           }
         }
       },
@@ -2393,8 +2680,13 @@
             "type": "string",
             "format": "date-time"
           },
+          "hash": {
+            "type": "string",
+            "description": "32-character forward-compatible change-detection hash. Prefer over md5 for change detection."
+          },
           "md5": {
-            "type": "string"
+            "type": "string",
+            "description": "22-character base64 legacy hash."
           }
         }
       },
@@ -2457,11 +2749,17 @@
         "description": "Image metadata returned from the program image index endpoints. Width/height may be integers (newer responses) or stringified integers (legacy responses).",
         "properties": {
           "width": {
-            "type": ["integer", "string"],
+            "type": [
+              "integer",
+              "string"
+            ],
             "description": "Image width in pixels. May be integer or stringified integer."
           },
           "height": {
-            "type": ["integer", "string"],
+            "type": [
+              "integer",
+              "string"
+            ],
             "description": "Image height in pixels. May be integer or stringified integer."
           },
           "uri": {
@@ -2479,12 +2777,22 @@
           "category": {
             "type": "string",
             "enum": [
-              "Banner", "Banner-L1", "Banner-L2", "Banner-L3",
-              "Banner-LO", "Banner-LOT",
-              "Iconic", "Staple",
-              "Cast Ensemble", "Cast in Character",
-              "Logo", "Box Art", "Poster Art",
-              "Scene Still", "Photo", "Photo-headshot"
+              "Banner",
+              "Banner-L1",
+              "Banner-L2",
+              "Banner-L3",
+              "Banner-LO",
+              "Banner-LOT",
+              "Iconic",
+              "Staple",
+              "Cast Ensemble",
+              "Cast in Character",
+              "Logo",
+              "Box Art",
+              "Poster Art",
+              "Scene Still",
+              "Photo",
+              "Photo-headshot"
             ]
           },
           "tier": {
@@ -2494,7 +2802,10 @@
           "primary": {
             "type": "string",
             "description": "If 'true', this is the primary image for the category",
-            "enum": ["true", "false"]
+            "enum": [
+              "true",
+              "false"
+            ]
           },
           "caption": {
             "$ref": "#/components/schemas/ImageCaption"
@@ -2538,7 +2849,7 @@
       },
       "CelebrityImage": {
         "type": "object",
-        "description": "Image object returned by GET /metadata/celebrity/{personId}. Note: uses 'lastUpdated' (with 'd'). The embedded images array in GET /celebrity/{personId} uses 'lastUpdate' (without 'd') — see CelebrityDetailImage.",
+        "description": "Image object returned by GET /metadata/celebrity/{personId}. Note: uses 'lastUpdated' (with 'd'). The embedded images array in GET /celebrity/{personId} uses 'lastUpdate' (without 'd') \u00e2\u20ac\u201d see CelebrityDetailImage.",
         "properties": {
           "width": {
             "type": "string",
@@ -2612,7 +2923,12 @@
       },
       "Celebrity": {
         "type": "object",
-        "required": ["personId", "updateDate", "type", "names"],
+        "required": [
+          "personId",
+          "updateDate",
+          "type",
+          "names"
+        ],
         "properties": {
           "personId": {
             "type": "string",
@@ -2625,11 +2941,19 @@
           },
           "type": {
             "type": "string",
-            "enum": ["Person", "Group", "Other"]
+            "enum": [
+              "Person",
+              "Group",
+              "Other"
+            ]
           },
           "gender": {
             "type": "string",
-            "enum": ["Male", "Female", "Non-Binary"]
+            "enum": [
+              "Male",
+              "Female",
+              "Non-Binary"
+            ]
           },
           "birthPlace": {
             "type": "string"
@@ -2639,14 +2963,23 @@
             "format": "date"
           },
           "deathDate": {
-            "type": ["string", "null"],
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date"
           },
           "deathPlace": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "deathCause": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "names": {
             "type": "array",
@@ -2677,25 +3010,43 @@
       },
       "CelebrityName": {
         "type": "object",
-        "required": ["firstName", "nameId"],
+        "required": [
+          "firstName",
+          "nameId"
+        ],
         "properties": {
           "firstName": {
             "type": "string"
           },
           "middleName": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "lastName": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "namePrefix": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "nameSuffix": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "nameLanguage": {
-            "type": ["string", "null"]
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "isPrimary": {
             "type": "boolean"
@@ -2708,7 +3059,10 @@
       },
       "MediographyEntry": {
         "type": "object",
-        "required": ["programID", "title"],
+        "required": [
+          "programID",
+          "title"
+        ],
         "properties": {
           "programID": {
             "type": "string"
@@ -2721,7 +3075,10 @@
           },
           "programType": {
             "type": "string",
-            "enum": ["Movie", "Show"]
+            "enum": [
+              "Movie",
+              "Show"
+            ]
           },
           "credits": {
             "type": "array",
@@ -2735,7 +3092,9 @@
                   "type": "string"
                 }
               },
-              "required": ["role"]
+              "required": [
+                "role"
+              ]
             }
           },
           "year": {
@@ -2745,7 +3104,12 @@
       },
       "CelebrityAward": {
         "type": "object",
-        "required": ["awardName", "awardCategory", "awardYear", "wonAward"],
+        "required": [
+          "awardName",
+          "awardCategory",
+          "awardYear",
+          "wonAward"
+        ],
         "properties": {
           "awardName": {
             "type": "string"
