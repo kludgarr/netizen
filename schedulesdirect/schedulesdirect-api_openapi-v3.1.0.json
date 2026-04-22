@@ -1081,11 +1081,12 @@
     },
     "/messages/{messageId}": {
       "delete": {
+        "deprecated": true,
         "tags": [
           "Messages"
         ],
         "summary": "Delete a message",
-        "description": "Removes a non-system message from the account status response.",
+        "description": "Documented by SD but unimplemented by reference clients. Messages in notifications[] and account.messages[] are plain strings with no embedded ID; the messageId path parameter has no observable source in practice.",
         "parameters": [
           {
             "name": "messageId",
@@ -1326,8 +1327,9 @@
           },
           "notifications": {
             "type": "array",
+            "description": "System-wide SD announcements. Plain strings. Rare; log and display.",
             "items": {
-              "type": "object"
+              "type": "string"
             }
           },
           "systemStatus": {
@@ -1365,8 +1367,9 @@
           },
           "messages": {
             "type": "array",
+            "description": "Per-account SD messages. Plain strings. Rare; log and display.",
             "items": {
-              "type": "object"
+              "type": "string"
             }
           },
           "maxLineups": {
