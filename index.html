@@ -478,7 +478,7 @@
     <div id="catalog"></div>
 
     <footer class="site-footer">
-      <a class="footer-link" href="https://github.com/warrentc3/netizen">github.com/warrentc3/netizen</a>
+      <a class="footer-link" href="https://github.com/kludgarr/netizen">github.com/kludgarr/netizen</a>
       <a class="footer-badge" href="https://creativecommons.org/publicdomain/zero/1.0/">CC0 1.0 Universal (CC0 1.0) Public Domain Dedication</a>
     </footer>
   </div>
@@ -512,7 +512,7 @@
         const repo = pathParts[0];
         return `https://github.com/${owner}/${repo}/releases/download/spec-bundles-latest`;
       }
-      return 'https://github.com/warrentc3/netizen/releases/download/spec-bundles-latest';
+      return 'https://github.com/kludgarr/netizen/releases/download/spec-bundles-latest';
     }
 
     const appRootPath = getAppRootPath();
@@ -574,7 +574,7 @@
     async function loadCatalog() {
       el.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>'; // safe static markup
       try {
-        // const res = await fetch('https://raw.githubusercontent.com/warrentc3/netizen/main/catalog.json');
+        // const res = await fetch('https://raw.githubusercontent.com/kludgarr/netizen/main/catalog.json');
         const res = await fetch('./catalog.json', { cache: 'no-cache' });
         if (!res.ok) throw new Error('catalog fetch failed');
         const catalog = await res.json();
