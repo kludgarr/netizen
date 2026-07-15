@@ -12,7 +12,7 @@
   },
   "servers": [
     {
-      "url": "{scheme}://{host}",
+      "url": "{scheme}://{host}:{port}",
       "variables": {
         "scheme": {
           "default": "http",
@@ -22,8 +22,15 @@
           ],
           "description": "Protocol for the DNS server endpoint. Use http for local/offline access, or https when TLS is enabled."
         },
+        "port": {
+          "enum": [
+            "5380",
+            "53443"
+          ],
+          "default": "5380"
+        },
         "host": {
-          "default": "localhost:5380",
+          "default": "localhost",
           "description": "DNS server host and port"
         }
       }
