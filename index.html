@@ -166,7 +166,6 @@
       grid-template-columns: 1fr auto;
       gap: 1rem;
       align-items: start;
-      cursor: pointer;
       transition: border-color 0.15s, transform 0.2s, box-shadow 0.2s;
       text-decoration: none;
       color: inherit;
@@ -271,6 +270,31 @@
       gap: 6px;
       align-items: flex-end;
       white-space: nowrap
+    }
+
+    .spec-editions {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      min-width: 280px
+    }
+
+    .spec-edition {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      align-items: flex-end
+    }
+
+    .spec-edition .spec-actions {
+      flex-direction: row;
+      flex-wrap: wrap;
+      justify-content: flex-end
+    }
+
+    .vendor-actions {
+      align-items: flex-start;
+      margin-top: 8px
     }
 
     .action-link {
@@ -428,6 +452,14 @@
         flex-wrap: wrap;
       }
 
+      .spec-editions {
+        min-width: 0;
+      }
+
+      .spec-edition {
+        align-items: flex-start;
+      }
+
       .site-footer {
         flex-direction: column;
         align-items: flex-start;
@@ -471,7 +503,7 @@
     </header>
 
     <p style="font-size:12px; color:var(--text-muted); text-align:center; line-height:1.6; padding:0 10%;">
-      Hosted Swagger UI is explore-only. Each ZIP bundle includes the OpenAPI spec, an interactive Swagger UI, and local serve scripts (Python &amp; PowerShell) with API proxy and auto-shutdown for full "Try it out" support.
+      Each ZIP is a standalone package containing one OpenAPI spec and local launchers (Python &amp; PowerShell) with a generated Swagger UI, API proxy, and auto-shutdown.
     </p>
     <hr style="border:none; border-top:0.5px solid var(--border); margin:1.5rem 0;">
     <p class="catalog-label">Catalog</p>
@@ -542,31 +574,43 @@
       const name = meta.name || folder;
       const desc = meta.description || '';
       const tags = meta.tags || [];
-      const swagger = meta.spec_file || null;
-      const zipName = `${folder.replace(/\//g, '-')}.zip`;
-      const zipUrl = `${releaseBaseUrl}/${zipName}`;
+      const vendorChips = [
+        ...tags.map(t => `<span class="chip">${t}</span>`),
+      ].filter(Boolean).join('');
 
-      const actions = [
-        `<a class="action-link" href="${zipUrl}">Download ZIP ↗</a>`,
-        `<a class="action-link-primary" href="${base}/">Swagger UI ↗</a>`,
-        swagger ? `<a class="action-link" href="${base}/${swagger}">JSON spec ↗</a>` : '',
+      const editions = (meta.specs || []).map(spec => {
+        const specUrl = `${base}/${spec.specFile}`;
+        const zipUrl = `${releaseBaseUrl}/${spec.artifactFile}`;
+        const chips = [
+          `<span class="chip chip-blue">vendor ${spec.vendorVersion}</span>`,
+          `<span class="chip">OpenAPI ${spec.openapiVersion}</span>`,
+          `<span class="chip">Netizen r${spec.netizenVersion}</span>`,
+          `<span class="chip chip-amber">${spec.operations} operations</span>`,
+        ].join('');
+        return `
+          <div class="spec-edition">
+            <div class="chips">${chips}</div>
+            <div class="spec-actions">
+              <a class="action-link-primary" href="${zipUrl}">Download ZIP ↗</a>
+              <a class="action-link" href="${specUrl}">JSON spec ↗</a>
+            </div>
+          </div>`;
+      }).join('');
+
+      const vendorActions = [
         meta.upstream ? `<a class="action-link" href="${meta.upstream}">Source ↗</a>` : '',
         meta.site ? `<a class="action-link" href="${meta.site}">Website ↗</a>` : '',
       ].filter(Boolean).join('');
 
-      const chips = [
-        ...tags.map(t => `<span class="chip">${t}</span>`),
-        meta.endpoints ? `<span class="chip chip-amber">${meta.endpoints} endpoints</span>` : '',
-      ].filter(Boolean).join('');
-
       return `
-      <article class="spec-card" data-href="${base}/" role="link" tabindex="0" aria-label="${name} API spec">
+      <article class="spec-card">
         <div>
           <div class="spec-name">${name}</div>
           ${desc ? `<p class="spec-desc">${desc}</p>` : ''}
-          <div class="chips">${chips}</div>
+          <div class="chips">${vendorChips}</div>
+          <div class="spec-actions vendor-actions">${vendorActions}</div>
         </div>
-        <div class="spec-actions">${actions}</div>
+        <div class="spec-editions">${editions}</div>
       </article>`;
     }
 
@@ -574,7 +618,6 @@
     async function loadCatalog() {
       el.innerHTML = '<div class="skeleton"></div><div class="skeleton"></div>'; // safe static markup
       try {
-        // const res = await fetch('https://raw.githubusercontent.com/kludgarr/netizen/main/catalog.json');
         const res = await fetch('./catalog.json', { cache: 'no-cache' });
         if (!res.ok) throw new Error('catalog fetch failed');
         const catalog = await res.json();
@@ -591,24 +634,6 @@
         el.innerHTML = '<p class="error-msg">Could not load catalog — check back soon.</p>'; // safe static markup
       }
     }
-
-    // Make the whole card clickable without nesting links inside links.
-    el.addEventListener('click', (event) => {
-      const card = event.target.closest('.spec-card');
-      if (!card || event.target.closest('a')) return;
-      const href = card.dataset.href;
-      if (href) window.location.href = href;
-    });
-
-    el.addEventListener('keydown', (event) => {
-      const card = event.target.closest('.spec-card');
-      if (!card) return;
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        const href = card.dataset.href;
-        if (href) window.location.href = href;
-      }
-    });
 
     loadCatalog();
   </script>

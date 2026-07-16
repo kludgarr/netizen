@@ -14,6 +14,18 @@
     },
     "x-source-swagger": "https://www.omdbapi.com/swagger.json"
   },
+  "x-netizen": {
+    "catalog": {
+      "name": "OMDb API",
+      "description": "RESTful web service for movie, series, and episode metadata sourced from IMDb. Single-endpoint query-parameter API with API key authentication.",
+      "tags": [
+        "movies",
+        "media"
+      ],
+      "site": "https://www.omdbapi.com",
+      "upstream": "https://www.omdbapi.com/swagger.json"
+    }
+  },
   "servers": [
     {
       "url": "https://www.omdbapi.com",

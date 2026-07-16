@@ -4,7 +4,7 @@ Thanks for helping improve netizen.
 
 ## What This Repo Is
 
-netizen hosts community OpenAPI specs and lightweight Swagger UI pages for useful services.
+netizen hosts community OpenAPI specs and produces standalone local Swagger packages for useful services.
 
 Goals:
 
@@ -20,43 +20,46 @@ Goals:
 
 ## Spec Folder Conventions
 
-Each service folder should contain exactly:
+Each vendor folder contains one or more OpenAPI documents and an `AGENTS.md`
+symlink to the repository-root guide:
 
-1. `index.html`
-2. `*-api_openapi-vX.Y.Z.json`
+`<vendor>_openapi_v<openapi-version>.json`
 
 Examples:
 
-- `technitium-dns/index.html`
-- `technitium-dns/technitium-dns-api_openapi-v3.0.3.json`
+- `technitium-dns/technitium-dns_openapi_v3.0.3.json`
 
-## Catalog Requirements
+## Netizen Metadata
 
-Every service folder must have a matching entry in `catalog.json` with populated fields.
+Each spec must carry the same vendor-level `x-netizen.catalog` object:
 
 Required fields:
 
 - `name`
 - `description`
 - `tags`
-- `endpoints`
 - `site`
+- `upstream` (may be `null`)
+
+The workflow derives filenames, vendor and OpenAPI versions, Netizen revision,
+and path/operation counts. Do not maintain those values in `x-netizen`.
 
 ## Workflow Behavior
 
 On build runs, CI will:
 
-1. Validate folder structure.
-2. Validate `catalog.json` completeness.
-3. Generate ZIP bundles for all catalog folders.
-4. Publish/update release ZIP assets on `main`.
+1. Enumerate and validate every vendor spec.
+2. Generate the public `catalog.json`.
+3. Stamp published spec copies with their Git-derived Netizen revision.
+4. Generate one standalone ZIP per spec.
+5. Publish/update release ZIP assets and GitHub Pages on `main`.
 
-If CI fails, check workflow output in `.github/workflows/spec-structure.yml`.
+If CI fails, check workflow output in `.github/workflows/publish.yml`.
 
 ## Adding a New Service
 
-1. Create the folder with `index.html` and OpenAPI JSON.
-2. Add a `catalog.json` entry keyed by folder name.
+1. Create the vendor folder and its OpenAPI JSON.
+2. Add the vendor's curated `x-netizen.catalog` metadata.
 3. Keep copy focused on the service value, not spec construction details.
 4. Open a PR.
 

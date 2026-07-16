@@ -14,6 +14,18 @@
       "email": "support@tvmaze.com"
     }
   },
+  "x-netizen": {
+    "catalog": {
+      "name": "TVmaze",
+      "description": "Public TV and streaming metadata service for discovery, schedules, episode tracking, cast/crew data, and update feeds.",
+      "tags": [
+        "TV",
+        "media"
+      ],
+      "site": "https://www.tvmaze.com",
+      "upstream": "https://www.tvmaze.com/api"
+    }
+  },
   "servers": [
     {
       "url": "https://api.tvmaze.com"

@@ -1,0 +1,111 @@
+name: Build and publish Netizen
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/**"
+      - ".github/workflows/**"
+      - "*/*_openapi_v*.json"
+      - "favicon.svg"
+      - "index.html"
+      - "LICENSE"
+      - "LICENSE-CONTENT"
+      - "serve.ps1"
+      - "serve.py"
+      - "social-preview.png"
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/scripts/**"
+      - ".github/workflows/**"
+      - "*/*_openapi_v*.json"
+      - "favicon.svg"
+      - "index.html"
+      - "LICENSE"
+      - "LICENSE-CONTENT"
+      - "serve.ps1"
+      - "serve.py"
+      - "social-preview.png"
+  workflow_dispatch:
+
+concurrency:
+  group: netizen-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Generate catalog, published specs, and ZIP packages
+        run: python3 .github/scripts/build.py --pages-dir build/pages --dist-dir build/dist
+
+      - name: Upload ZIP artifacts for this run
+        uses: actions/upload-artifact@v7
+        with:
+          name: netizen-spec-zips-${{ github.run_id }}
+          path: build/dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/pages
+
+      - name: Publish ZIPs to public release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          tag="spec-bundles-latest"
+          title="Spec Bundles (Latest)"
+          timestamp=$(date -u +"%Y-%m-%d %H:%M UTC")
+          notes="Standalone Netizen packages, one per OpenAPI spec. Last updated: ${timestamp}."
+
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release delete "$tag" --yes
+            git push --delete origin "$tag" 2>/dev/null || true
+          fi
+
+          gh release create "$tag" --title "$title" --notes "$notes" build/dist/*.zip
+
+      - name: Job summary
+        run: |
+          {
+            echo "## Netizen Build Outputs"
+            echo
+            echo "- Vendors: $(python3 -c 'import json; print(len(json.load(open("build/pages/catalog.json"))))')"
+            echo "- Specs: $(python3 -c 'import json; print(sum(len(v["specs"]) for v in json.load(open("build/pages/catalog.json")).values()))')"
+            echo "- ZIPs: $(find build/dist -maxdepth 1 -name '*.zip' | wc -l)"
+            echo "- Run artifact: netizen-spec-zips-${{ github.run_id }}"
+            if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/main" ]]; then
+              echo "- Public release: https://github.com/${{ github.repository }}/releases/tag/spec-bundles-latest"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

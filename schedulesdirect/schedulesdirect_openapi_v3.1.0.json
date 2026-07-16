@@ -9,6 +9,19 @@
       "url": "https://schedulesdirect.org"
     }
   },
+  "x-netizen": {
+    "catalog": {
+      "name": "Schedules Direct",
+      "description": "Nonprofit TV listings and EPG data service providing lineups, schedules, program metadata, images, and celebrity data via JSON API.",
+      "tags": [
+        "TV",
+        "EPG",
+        "media"
+      ],
+      "site": "https://schedulesdirect.org",
+      "upstream": "https://github.com/SchedulesDirect/JSON-Service/wiki/API-20141201"
+    }
+  },
   "servers": [
     {
       "url": "https://json.schedulesdirect.org/20141201",
