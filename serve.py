@@ -1,31 +1,10 @@
 #!/usr/bin/env python3
-"""Single-surface Netizen Swagger launcher and OpenAPI-route-aware forwarder.
+"""Open a Netizen OpenAPI document in a local Swagger UI.
 
-Configuration is optional. Without --config, the launcher uses
-netizen.config.json beside the script, creating it after the OpenAPI document
-has been resolved unambiguously.
-
-OpenAPI document resolution order:
-
-1. --spec
-2. specPath from the configuration document
-3. exactly one adjacent versioned OpenAPI JSON document
-4. failure
-
-Configuration shape:
-
-    {
-      "specPath": "./tvmaze_openapi_v3.0.3.json",
-      "upstream": {
-        "baseUrl": null,
-        "requestHeaders": {}
-      }
-    }
-
-When upstream.baseUrl is absent, blank, or null, the first root OpenAPI Server
-Object is resolved using each Server Variable Object's default. An explicitly
-configured base URL becomes the default server in the in-memory document served
-to Swagger. The source document is never modified.
+The launcher resolves a document from --spec, config.json, or unambiguous
+adjacent discovery; serves a runtime copy to Swagger UI; and forwards declared
+operations to an upstream selected by config, the OpenAPI document, or Swagger's
+spec-defined Server Object controls.
 """
 
 from __future__ import annotations
@@ -40,6 +19,7 @@ import os
 import re
 import ssl
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -48,16 +28,24 @@ import webbrowser
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 
-HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options", "trace")
-FORWARDING_ROUTE = "/api"
+SWAGGER_UI_VERSION = "5.32.8"
+SERVER_SELECTION_HEADER = "X-Netizen-Upstream-Base"
 SPEC_ROUTE = "/openapi.json"
-UPSTREAM_BASE_HEADER = "X-Netizen-Upstream-Base"
+PROXY_ROUTE = "/api"
 IDLE_TIMEOUT_SECONDS = 120
-MAX_CONCURRENT_REQUESTS = 8
 OUTBOUND_TIMEOUT_SECONDS = 100
+HTTP_METHODS = ("get", "post", "put", "patch", "delete", "head", "options", "trace")
+TOKEN = r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+"
+HEADER_NAME = re.compile(rf"^{TOKEN}$")
+PROHIBITED_HEADER_VALUE = re.compile(r"[\x00-\x08\x0a-\x1f\x7f]")
+CONTENT_TYPE = re.compile(
+    rf"^{TOKEN}/{TOKEN}(?:[ \t]*;[ \t]*{TOKEN}[ \t]*=[ \t]*"
+    rf'(?:{TOKEN}|"(?:[\t !#-\[\]-~\x80-\xff]|\\[\t !-~\x80-\xff])*")'
+    r")*[ \t]*$"
+)
 FIXED_HOP_BY_HOP = {
     "connection",
     "keep-alive",
@@ -68,19 +56,27 @@ FIXED_HOP_BY_HOP = {
     "transfer-encoding",
     "upgrade",
 }
-ASSETS = {
-    "stylesheet": ("swagger-ui.css", "/assets/swagger-ui.css", "text/css; charset=utf-8"),
-    "bundle": ("swagger-ui-bundle.js", "/assets/swagger-ui-bundle.js", "application/javascript; charset=utf-8"),
-    "preset": (
-        "swagger-ui-standalone-preset.js",
-        "/assets/swagger-ui-standalone-preset.js",
-        "application/javascript; charset=utf-8",
-    ),
-}
 
 
 class ConfigurationError(ValueError):
-    """Configuration or OpenAPI input cannot satisfy the runtime contract."""
+    """Local configuration or OpenAPI input is invalid."""
+
+
+@dataclass(frozen=True)
+class Asset:
+    name: str
+    route: str
+    content_type: str
+    path: Path
+
+
+@dataclass(frozen=True)
+class Destination:
+    url: str
+    scheme: str
+    host: str
+    port: int | None
+    path: str
 
 
 @dataclass(frozen=True)
@@ -89,232 +85,473 @@ class Route:
     template: str
     matcher: re.Pattern[str]
     suffix_pattern: str
-    is_templated: bool
-    request_content_types: tuple[str, ...]
+    allowed_bases: tuple[re.Pattern[str], ...]
+
+    @property
+    def is_templated(self) -> bool:
+        return "{" in self.template
+
+    def destination(self, candidate: str) -> Destination:
+        # Keep this as a direct fullmatch guard: the selected URL is permitted
+        # only when config or an effective OpenAPI Server Object describes it.
+        for allowed in self.allowed_bases:
+            if allowed.fullmatch(candidate):
+                return parse_destination(candidate, "Selected upstream base URL")
+        raise ConfigurationError(
+            "Selected upstream base URL is not declared by config or the "
+            "effective OpenAPI Server Objects."
+        )
 
 
-@dataclass(frozen=True)
-class Asset:
-    path: Path
-    content_type: str
+ASSET_DEFINITIONS = (
+    ("swagger-ui.css", "/assets/swagger-ui.css", "text/css; charset=utf-8"),
+    (
+        "swagger-ui-bundle.js",
+        "/assets/swagger-ui-bundle.js",
+        "application/javascript; charset=utf-8",
+    ),
+    (
+        "swagger-ui-standalone-preset.js",
+        "/assets/swagger-ui-standalone-preset.js",
+        "application/javascript; charset=utf-8",
+    ),
+)
 
 
-def require_properties(value: Any, names: Iterable[str], prefix: str = "") -> None:
-    if not isinstance(value, dict):
-        raise ConfigurationError(f"{prefix.rstrip('.')} must be an object.")
-    for name in names:
-        if name not in value or value[name] is None:
-            raise ConfigurationError(f"Config property '{prefix}{name}' is required.")
+def resolve_path(base: Path, value: str) -> Path:
+    path = Path(value)
+    return (path if path.is_absolute() else base / path).resolve()
 
 
-def resolve_config_path(base_directory: Path, value: str) -> Path:
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = base_directory / candidate
-    return candidate.resolve()
+def header_name(name: str, source: str) -> str:
+    if not HEADER_NAME.fullmatch(name):
+        raise ValueError(f"{source} contains an invalid HTTP header name.")
+    return name
 
 
-def resolve_local_reference(spec: dict[str, Any], value: Any, kind: str) -> Any:
+def header_value(value: str, source: str) -> str:
+    if PROHIBITED_HEADER_VALUE.search(value):
+        raise ValueError(f"{source} contains a prohibited HTTP control character.")
+    return value
+
+
+def content_type(value: str, source: str) -> str:
+    header_value(value, source)
+    if not CONTENT_TYPE.fullmatch(value):
+        raise ValueError(f"{source} is not a valid media type.")
+    return value
+
+
+def validated_headers(headers: Iterable[tuple[str, str]], source: str) -> list[tuple[str, str]]:
+    result: list[tuple[str, str]] = []
+    for name, value in headers:
+        name = str(name)
+        value = str(value)
+        header_name(name, f"{source} header")
+        header_value(value, f"{source} header '{name}'")
+        if name.casefold() == "content-type":
+            content_type(value, f"{source} Content-Type")
+        result.append((name, value))
+    return result
+
+
+def hop_by_hop_names(headers: Iterable[tuple[str, str]]) -> set[str]:
+    result = set(FIXED_HOP_BY_HOP)
+    for name, value in headers:
+        if name.casefold() == "connection":
+            for item in value.split(","):
+                item = item.strip()
+                if item:
+                    header_name(item, "Connection")
+                    result.add(item.casefold())
+    return result
+
+
+def parse_destination(value: str, source: str) -> Destination:
+    if not isinstance(value, str) or not value.strip():
+        raise ConfigurationError(f"{source} must be a non-empty URL.")
+    value = value.strip().rstrip("/")
+    if any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
+        raise ConfigurationError(f"{source} contains whitespace or a control character.")
+    if "\\" in value:
+        raise ConfigurationError(f"{source} must not contain a backslash.")
+
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError as error:
+        raise ConfigurationError(f"{source} is not a valid URL: '{value}'.") from error
+    if parsed.scheme.casefold() not in {"http", "https"} or not parsed.hostname:
+        raise ConfigurationError(f"{source} must be an absolute HTTP or HTTPS URL: '{value}'.")
+    if parsed.query or parsed.fragment:
+        raise ConfigurationError(f"{source} must not contain a query or fragment: '{value}'.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ConfigurationError(f"{source} must not contain user information: '{value}'.")
+
+    return Destination(
+        url=value,
+        scheme=parsed.scheme.casefold(),
+        host=parsed.hostname,
+        port=port,
+        path=parsed.path.rstrip("/"),
+    )
+
+
+def resolve_reference(document: dict[str, Any], value: Any, kind: str) -> Any:
     resolved = value
     visited: set[str] = set()
     while isinstance(resolved, dict) and "$ref" in resolved:
-        reference = str(resolved["$ref"])
-        if not reference.startswith("#/"):
+        reference = resolved["$ref"]
+        if not isinstance(reference, str) or not reference.startswith("#/"):
             raise ConfigurationError(
-                f"External OpenAPI {kind} reference is not supported for runtime routing: {reference}"
+                f"External OpenAPI {kind} reference is not supported by the local proxy: {reference}"
             )
         if reference in visited:
             raise ConfigurationError(
-                f"Cyclic OpenAPI {kind} reference is not supported for runtime routing: {reference}"
+                f"Cyclic OpenAPI {kind} reference is not supported by the local proxy: {reference}"
             )
         visited.add(reference)
-        resolved = spec
+        resolved = document
         for token in reference[2:].split("/"):
-            name = token.replace("~1", "/").replace("~0", "~")
-            if not isinstance(resolved, dict) or name not in resolved:
+            key = token.replace("~1", "/").replace("~0", "~")
+            if not isinstance(resolved, dict) or key not in resolved:
                 raise ConfigurationError(f"OpenAPI {kind} reference did not resolve: {reference}")
-            resolved = resolved[name]
+            resolved = resolved[key]
     return resolved
 
 
-def _template_parts(path: str) -> Iterable[tuple[str, bool]]:
+def template_parts(template: str) -> Iterator[tuple[str, str | None]]:
     offset = 0
-    for match in re.finditer(r"\{[^}]+\}", path):
-        yield path[offset : match.start()], False
-        yield match.group(0), True
+    for match in re.finditer(r"\{([^}]+)\}", template):
+        yield template[offset : match.start()], None
+        yield "", match.group(1)
         offset = match.end()
-    yield path[offset:], False
+    yield template[offset:], None
 
 
-def _javascript_regex_escape(value: str) -> str:
-    return re.sub(r"([\\^$.*+?()\[\]{}|])", r"\\\1", value)
-
-
-def path_regex(path: str) -> re.Pattern[str]:
-    if path == "/":
+def path_pattern(template: str) -> re.Pattern[str]:
+    if template == "/":
         return re.compile(r"^/$")
-    normalized = path.rstrip("/")
     pieces = ["^"]
-    for text, variable in _template_parts(normalized):
-        pieces.append(r"[^/]+" if variable else re.escape(text))
+    for literal, variable in template_parts(template.rstrip("/")):
+        pieces.append(r"[^/]+" if variable is not None else re.escape(literal))
     pieces.append(r"/?$")
     return re.compile("".join(pieces))
 
 
-def path_suffix_regex_source(path: str) -> str:
-    if path == "/":
+def javascript_suffix_pattern(template: str) -> str:
+    if template == "/":
         return "/$"
-    normalized = path.rstrip("/")
     pieces: list[str] = []
-    for text, variable in _template_parts(normalized):
-        pieces.append("[^/]+" if variable else _javascript_regex_escape(text))
+    for literal, variable in template_parts(template.rstrip("/")):
+        if variable is not None:
+            pieces.append("[^/]+")
+        else:
+            pieces.append(re.sub(r"([\\^$.*+?()\[\]{}|])", r"\\\1", literal))
     pieces.append("/?$")
     return "".join(pieces)
 
 
-def openapi_routes(spec: dict[str, Any]) -> list[Route]:
-    paths = spec.get("paths")
+def server_variables(server: dict[str, Any]) -> dict[str, Any]:
+    variables = server.get("variables", {})
+    if not isinstance(variables, dict):
+        raise ConfigurationError("OpenAPI Server Object.variables must be an object.")
+    return variables
+
+
+def expand_server_url(server: Any, source: str) -> str:
+    if not isinstance(server, dict):
+        raise ConfigurationError(f"{source} must be an object.")
+    template = server.get("url")
+    if not isinstance(template, str) or not template.strip():
+        raise ConfigurationError(f"{source} has no URL.")
+    expanded = template
+    variables = server_variables(server)
+    for match in re.finditer(r"\{([^}]+)\}", template):
+        name = match.group(1)
+        variable = variables.get(name)
+        if not isinstance(variable, dict) or "default" not in variable:
+            raise ConfigurationError(f"OpenAPI server variable '{name}' has no default value.")
+        default = variable["default"]
+        if default is None or isinstance(default, (list, dict)):
+            raise ConfigurationError(f"OpenAPI server variable '{name}' has an invalid default value.")
+        expanded = expanded.replace("{" + name + "}", str(default))
+    if re.search(r"\{[^}]+\}", expanded):
+        raise ConfigurationError(f"{source} contains an unresolved variable: '{expanded}'.")
+    return expanded
+
+
+def server_base_pattern(server: Any) -> re.Pattern[str]:
+    if not isinstance(server, dict):
+        raise ConfigurationError("An effective OpenAPI Server Object must be an object.")
+    template = server.get("url")
+    if not isinstance(template, str) or not template.strip():
+        raise ConfigurationError("An effective OpenAPI Server Object has no URL.")
+
+    # Validate the default rendering as a usable destination as well as the
+    # complete family of renderings accepted below.
+    parse_destination(expand_server_url(server, "An effective OpenAPI server"), "OpenAPI server")
+    variables = server_variables(server)
+    pieces = ["^"]
+    for literal, variable_name in template_parts(template.rstrip("/")):
+        if variable_name is None:
+            pieces.append(re.escape(literal))
+            continue
+        variable = variables.get(variable_name)
+        if not isinstance(variable, dict):
+            raise ConfigurationError(
+                f"OpenAPI server URL references undeclared variable '{variable_name}'."
+            )
+        choices = variable.get("enum")
+        if choices is not None:
+            if not isinstance(choices, list) or not choices:
+                raise ConfigurationError(
+                    f"OpenAPI server variable '{variable_name}'.enum must be a non-empty array."
+                )
+            if any(choice is None or isinstance(choice, (list, dict)) for choice in choices):
+                raise ConfigurationError(
+                    f"OpenAPI server variable '{variable_name}'.enum contains a non-scalar value."
+                )
+            pieces.append("(?:" + "|".join(re.escape(str(choice)) for choice in choices) + ")")
+        else:
+            pieces.append(r"[^?#]+?")
+    pieces.append(r"/?$")
+    return re.compile("".join(pieces), re.IGNORECASE)
+
+
+def server_list(container: dict[str, Any], inherited: list[Any], source: str) -> list[Any]:
+    if "servers" not in container:
+        return inherited
+    servers = container["servers"]
+    if not isinstance(servers, list):
+        raise ConfigurationError(f"{source}.servers must be an array.")
+    return servers
+
+
+def build_routes(document: dict[str, Any], configured_base: str | None) -> list[Route]:
+    paths = document.get("paths")
     if not isinstance(paths, dict):
         raise ConfigurationError("OpenAPI document.paths must be an object.")
+    root_servers = server_list(document, [], "OpenAPI document")
+    configured_pattern = (
+        re.compile(r"^" + re.escape(configured_base.rstrip("/")) + r"/?$", re.IGNORECASE)
+        if configured_base
+        else None
+    )
+
     routes: list[Route] = []
-    for template, unresolved_path_item in paths.items():
-        path_item = resolve_local_reference(spec, unresolved_path_item, "Path Item")
+    for template, unresolved in paths.items():
+        if not isinstance(template, str) or not template.startswith("/"):
+            raise ConfigurationError("Every OpenAPI path template must begin with '/'.")
+        path_item = resolve_reference(document, unresolved, "Path Item")
         if not isinstance(path_item, dict):
-            raise ConfigurationError(f"OpenAPI Path Item did not resolve to an object: {template}")
+            raise ConfigurationError(f"OpenAPI Path Item '{template}' must resolve to an object.")
+        path_servers = server_list(path_item, root_servers, f"OpenAPI path '{template}'")
         for method in HTTP_METHODS:
             operation = path_item.get(method)
             if not isinstance(operation, dict):
                 continue
-            request_body = resolve_local_reference(spec, operation.get("requestBody"), "request body")
-            content = request_body.get("content") if isinstance(request_body, dict) else None
+            effective = server_list(
+                operation,
+                path_servers,
+                f"OpenAPI operation {method.upper()} {template}",
+            )
+            allowed = ([configured_pattern] if configured_pattern is not None else []) + [
+                server_base_pattern(server) for server in effective
+            ]
+            if not allowed:
+                raise ConfigurationError(
+                    f"OpenAPI operation {method.upper()} {template} has no effective upstream server."
+                )
             routes.append(
                 Route(
                     method=method.upper(),
                     template=template,
-                    matcher=path_regex(template),
-                    suffix_pattern=path_suffix_regex_source(template),
-                    is_templated="{" in template,
-                    request_content_types=tuple(content.keys()) if isinstance(content, dict) else (),
+                    matcher=path_pattern(template),
+                    suffix_pattern=javascript_suffix_pattern(template),
+                    allowed_bases=tuple(allowed),
                 )
             )
+    if not routes:
+        raise ConfigurationError("The OpenAPI document declares no supported HTTP operations.")
     return routes
 
 
 def find_route(routes: list[Route], method: str, path: str) -> tuple[Route | None, bool]:
-    path_matches = [route for route in routes if route.matcher.fullmatch(path)]
-    method_matches = [route for route in path_matches if route.method == method]
-    method_matches.sort(key=lambda route: route.is_templated)
-    return (method_matches[0] if method_matches else None, bool(path_matches))
+    matches = [route for route in routes if route.matcher.fullmatch(path)]
+    matching_method = [route for route in matches if route.method == method]
+    matching_method.sort(key=lambda route: route.is_templated)
+    return (matching_method[0] if matching_method else None, bool(matches))
 
 
-def _validate_http_base_url(value: str, label: str) -> str:
-    parsed = urllib.parse.urlsplit(value)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-        raise ConfigurationError(f"{label} must be an absolute HTTP or HTTPS URL: '{value}'.")
-    if parsed.query or parsed.fragment:
-        raise ConfigurationError(f"{label} must not contain a query or fragment: '{value}'.")
-    return value.rstrip("/")
+def validate_configured_headers(value: Any) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ConfigurationError("Config upstream.requestHeaders must be an object or null.")
+    result: dict[str, str] = {}
+    for raw_name, raw_value in value.items():
+        name = str(raw_name)
+        if raw_value is None or isinstance(raw_value, (list, dict)):
+            raise ConfigurationError(f"Config upstream.requestHeaders.{name} must be a scalar value.")
+        rendered = str(raw_value)
+        try:
+            header_name(name, f"Config upstream.requestHeaders.{name}")
+            header_value(rendered, f"Config upstream.requestHeaders.{name}")
+            if name.casefold() == "content-type":
+                content_type(rendered, "Config upstream.requestHeaders.Content-Type")
+        except ValueError as error:
+            raise ConfigurationError(str(error)) from error
+        folded = name.casefold()
+        if folded == SERVER_SELECTION_HEADER.casefold():
+            raise ConfigurationError(
+                f"Config upstream.requestHeaders cannot set reserved header '{SERVER_SELECTION_HEADER}'."
+            )
+        if folded in FIXED_HOP_BY_HOP:
+            raise ConfigurationError(
+                f"Config upstream.requestHeaders cannot set hop-by-hop header '{name}'."
+            )
+        if folded in {"host", "content-length"}:
+            raise ConfigurationError(
+                f"Config upstream.requestHeaders cannot set transport-managed header '{name}'."
+            )
+        result[name] = rendered
+    return result
 
 
-def default_upstream_base_url(spec: dict[str, Any]) -> str:
-    servers = spec.get("servers")
+def configured_default(document: dict[str, Any], upstream: dict[str, Any]) -> tuple[Destination, str | None]:
+    configured = upstream.get("baseUrl")
+    if configured is not None and not isinstance(configured, str):
+        raise ConfigurationError("Config upstream.baseUrl must be a string or null.")
+    configured = configured.strip() if isinstance(configured, str) else ""
+    if configured:
+        destination = parse_destination(configured, "Config upstream.baseUrl")
+        return destination, destination.url
+
+    servers = document.get("servers")
     if not isinstance(servers, list) or not servers:
         raise ConfigurationError(
-            "upstream.baseUrl was not configured and the OpenAPI document declares no root servers."
+            "Config upstream.baseUrl is empty and the OpenAPI document declares no root servers."
         )
-    server = servers[0]
-    if not isinstance(server, dict) or not str(server.get("url") or "").strip():
-        raise ConfigurationError("The first root OpenAPI Server Object has no URL.")
-    url = str(server["url"])
-    variables = server.get("variables")
-    if isinstance(variables, dict):
-        for name, variable in variables.items():
-            if not isinstance(variable, dict) or variable.get("default") is None:
-                raise ConfigurationError(f"OpenAPI server variable '{name}' has no default value.")
-            url = url.replace("{" + name + "}", str(variable["default"]))
-    if re.search(r"\{[^}]+\}", url):
-        raise ConfigurationError(f"The first root OpenAPI server URL contains an unresolved variable: '{url}'.")
-    return url
+    expanded = expand_server_url(servers[0], "The first root OpenAPI Server Object")
+    return parse_destination(expanded, "The first root OpenAPI server"), None
 
 
-def resolve_upstream_base_url(spec: dict[str, Any], upstream: Any) -> tuple[str, bool]:
-    configured = upstream.get("baseUrl") if isinstance(upstream, dict) else None
-    explicitly_configured = isinstance(configured, str) and bool(configured.strip())
-    candidate = configured if explicitly_configured else default_upstream_base_url(spec)
-    return _validate_http_base_url(str(candidate), "The resolved upstream base URL"), explicitly_configured
-
-
-def runtime_openapi_document(spec: dict[str, Any], configured_base_url: str) -> dict[str, Any]:
-    runtime = copy.deepcopy(spec)
-    configured_server = {
-        "url": configured_base_url,
-        "description": "Runtime-configured default upstream.",
-    }
-
-    def prepend(container: Any, required: bool) -> None:
-        if not isinstance(container, dict):
-            return
-        if not required and "servers" not in container:
-            return
-        existing = container.get("servers")
-        existing = existing if isinstance(existing, list) else []
-        matching = next(
-            (
-                server
-                for server in existing
-                if isinstance(server, dict)
-                and str(server.get("url", "")).casefold() == configured_base_url.casefold()
-            ),
-            None,
-        )
-        default_server = matching if matching is not None else configured_server
-        container["servers"] = [default_server] + [
+def runtime_spec(document: dict[str, Any], configured_base: str | None) -> dict[str, Any]:
+    if configured_base is None:
+        return document
+    result = copy.deepcopy(document)
+    existing = result.get("servers")
+    if existing is not None and not isinstance(existing, list):
+        raise ConfigurationError("OpenAPI document.servers must be an array.")
+    existing = existing or []
+    matching = next(
+        (
             server
             for server in existing
-            if not (
-                isinstance(server, dict)
-                and str(server.get("url", "")).casefold() == configured_base_url.casefold()
+            if isinstance(server, dict)
+            and isinstance(server.get("url"), str)
+            and server["url"].casefold() == configured_base.casefold()
+        ),
+        None,
+    )
+    first = matching if matching is not None else {"url": configured_base}
+    result["servers"] = [first] + [server for server in existing if server is not matching]
+    return result
+
+
+def relative_config_spec(config_directory: Path, spec_path: Path) -> str:
+    try:
+        value = os.path.relpath(spec_path, config_directory).replace(os.sep, "/")
+    except ValueError:
+        return str(spec_path)
+    return value if value.startswith(".") else "./" + value
+
+
+def write_config_atomic(path: Path, settings: dict[str, Any]) -> None:
+    payload = (json.dumps(settings, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb", prefix=path.name + ".", suffix=".new", dir=path.parent, delete=False
+        ) as stream:
+            temporary = stream.name
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Linking publishes the fully-written file atomically and, unlike
+        # replace(), cannot overwrite a config created by another launcher.
+        os.link(temporary, path)
+        Path(temporary).unlink()
+        temporary = None
+    finally:
+        if temporary is not None:
+            Path(temporary).unlink(missing_ok=True)
+
+
+def install_swagger_ui(cache: Path) -> list[Asset]:
+    version_directory = cache / SWAGGER_UI_VERSION
+    assets = [
+        Asset(name, route, media_type, version_directory / name)
+        for name, route, media_type in ASSET_DEFINITIONS
+    ]
+    if all(asset.path.is_file() for asset in assets):
+        return assets
+
+    cache.mkdir(parents=True, exist_ok=True)
+    version_directory.mkdir(parents=True, exist_ok=True)
+    archive_path = cache / f"swagger-ui-v{SWAGGER_UI_VERSION}.zip"
+    if not archive_path.is_file():
+        release_request = urllib.request.Request(
+            "https://api.github.com/repos/swagger-api/swagger-ui/releases/tags/"
+            f"v{SWAGGER_UI_VERSION}",
+            headers={"User-Agent": "netizen"},
+        )
+        with urllib.request.urlopen(release_request, timeout=30) as response:
+            release = json.load(response)
+        archive_url = release.get("zipball_url")
+        if not isinstance(archive_url, str) or not archive_url:
+            raise RuntimeError(
+                f"Swagger UI release v{SWAGGER_UI_VERSION} did not provide a source archive."
             )
-        ]
+        download = archive_path.with_name(archive_path.name + ".download")
+        print(f"Downloading Swagger UI v{SWAGGER_UI_VERSION}...")
+        try:
+            request = urllib.request.Request(archive_url, headers={"User-Agent": "netizen"})
+            with urllib.request.urlopen(request, timeout=60) as source, download.open("wb") as target:
+                while chunk := source.read(1024 * 1024):
+                    target.write(chunk)
+            os.replace(download, archive_path)
+        finally:
+            download.unlink(missing_ok=True)
 
-    prepend(runtime, True)
-    for unresolved_path_item in runtime.get("paths", {}).values():
-        path_item = resolve_local_reference(runtime, unresolved_path_item, "Path Item")
-        prepend(path_item, False)
-        if isinstance(path_item, dict):
-            for method in HTTP_METHODS:
-                prepend(path_item.get(method), False)
-    return runtime
-
-
-def hop_by_hop_names(headers: Iterable[tuple[str, str]]) -> set[str]:
-    names = set(FIXED_HOP_BY_HOP)
-    for name, value in headers:
-        if name.casefold() == "connection":
-            names.update(token.strip().casefold() for token in value.split(",") if token.strip())
-    return names
-
-
-def validate_request_headers(headers: Any) -> dict[str, str]:
-    if headers is None:
-        return {}
-    if not isinstance(headers, dict):
-        raise ConfigurationError("upstream.requestHeaders must be an object or null.")
-    validated: dict[str, str] = {}
-    for name, value in headers.items():
-        if name.casefold() == UPSTREAM_BASE_HEADER.casefold():
-            raise ConfigurationError(
-                f"upstream.requestHeaders cannot configure reserved header '{UPSTREAM_BASE_HEADER}'."
-            )
-        if name.casefold() in FIXED_HOP_BY_HOP:
-            raise ConfigurationError(f"upstream.requestHeaders cannot configure hop-by-hop header '{name}'.")
-        validated[str(name)] = str(value)
-    return validated
+    with zipfile.ZipFile(archive_path) as archive:
+        names = archive.namelist()
+        for asset in assets:
+            matches = [
+                name
+                for name in names
+                if name == f"dist/{asset.name}" or name.endswith(f"/dist/{asset.name}")
+            ]
+            if len(matches) != 1:
+                raise RuntimeError(
+                    f"Swagger UI v{SWAGGER_UI_VERSION} archive must contain exactly one "
+                    f"dist/{asset.name}; found {len(matches)}."
+                )
+            temporary = asset.path.with_name(asset.path.name + ".extract")
+            try:
+                with archive.open(matches[0]) as source, temporary.open("wb") as target:
+                    while chunk := source.read(1024 * 1024):
+                        target.write(chunk)
+                os.replace(temporary, asset.path)
+            finally:
+                temporary.unlink(missing_ok=True)
+    return assets
 
 
-def html_safe_json(value: Any) -> str:
+def html_json(value: Any) -> str:
     return (
-        json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+        json.dumps(value, ensure_ascii=False, separators=(",", ":"))
         .replace("&", "\\u0026")
         .replace("<", "\\u003c")
         .replace(">", "\\u003e")
@@ -323,213 +560,150 @@ def html_safe_json(value: Any) -> str:
     )
 
 
-def swagger_html(title: str, runtime_json: str) -> bytes:
-    encoded_title = html.escape(title, quote=True)
-    document = f"""<!DOCTYPE html>
+def swagger_html(title: str, routes: list[Route], asset_routes: list[str]) -> bytes:
+    runtime = {
+        "specRoute": SPEC_ROUTE,
+        "proxyRoute": PROXY_ROUTE,
+        "localRoutes": [SPEC_ROUTE, *asset_routes],
+        "serverSelectionHeader": SERVER_SELECTION_HEADER,
+        "routes": [
+            {"method": route.method, "suffixPattern": route.suffix_pattern}
+            for route in sorted(routes, key=lambda route: (route.is_templated, -len(route.template)))
+        ],
+    }
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{encoded_title}</title>
-  <style>
-    body{{margin:0;padding:0}}.asset-toolbar{{position:sticky;top:0;z-index:10;padding:10px 12px;background:#101017;color:#d5d5e0;font:12px "Segoe UI",Arial,sans-serif;border-bottom:1px solid #ffffff24}}.auth-guidance{{margin-top:6px;color:#ffe08a}}.auth-guidance strong{{color:#fff}}
-    #swagger-ui .topbar{{background-color:#1a1a2e}}#swagger-ui .topbar-wrapper img{{display:none}}
-  </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{html.escape(title, quote=True)}</title>
+  <link rel="stylesheet" href="/assets/swagger-ui.css">
 </head>
-<body><div class="asset-toolbar"><div id="asset-status">Initializing Swagger UI assets...</div><div class="auth-guidance">After entering a credential, click <strong>Authorize</strong> inside that credential block. Closing the dialog does not apply it; a closed lock confirms it is active.</div></div><div id="swagger-ui"></div>
+<body>
+<div id="swagger-ui"></div>
+<script src="/assets/swagger-ui-bundle.js"></script>
+<script src="/assets/swagger-ui-standalone-preset.js"></script>
 <script>
-const CONFIG={runtime_json},statusEl=document.getElementById('asset-status');
-const load=(tag,attrs)=>new Promise((resolve,reject)=>{{const el=document.createElement(tag);Object.assign(el,attrs);el.onload=resolve;el.onerror=()=>reject(new Error('Failed to load '+(attrs.src||attrs.href)));document[tag==='link'?'head':'body'].appendChild(el)}});
-const ROUTES=CONFIG.routes.map(route=>({{...route,matcher:new RegExp(route.suffixPattern)}}));
+const NETIZEN={html_json(runtime)};
+const ROUTES=NETIZEN.routes.map(route=>({{...route,matcher:new RegExp(route.suffixPattern)}}));
 function requestInterceptor(req){{
   const target=new URL(req.url,window.location.origin);
-  const localControlRoutes=[CONFIG.specRoute,...Object.values(CONFIG.assets)];
-  if(target.origin===window.location.origin&&localControlRoutes.includes(target.pathname))return req;
-  if(target.origin===window.location.origin&&(target.pathname===CONFIG.forwardingRoute||target.pathname.startsWith(CONFIG.forwardingRoute+'/')))return req;
+  if(target.origin===window.location.origin&&NETIZEN.localRoutes.includes(target.pathname))return req;
+  if(target.origin===window.location.origin&&(target.pathname===NETIZEN.proxyRoute||target.pathname.startsWith(NETIZEN.proxyRoute+'/')))return req;
   const method=(req.method||'GET').toUpperCase();
   let selected=null;
-  for(const route of ROUTES){{if(route.method!==method)continue;const match=route.matcher.exec(target.pathname);if(match){{selected={{route,match}};break}}}}
-  if(!selected)throw new Error('Computed Swagger request URL did not end with a declared OpenAPI operation path.');
-  const renderedBase=target.origin+target.pathname.slice(0,selected.match.index);
-  req.headers=Object.assign({{}},req.headers||{{}},{{[CONFIG.upstreamBaseHeader]:renderedBase}});
-  req.url=window.location.origin+CONFIG.forwardingRoute+selected.match[0]+target.search;
+  for(const route of ROUTES){{
+    if(route.method!==method)continue;
+    const match=route.matcher.exec(target.pathname);
+    if(match){{selected=match;break;}}
+  }}
+  if(!selected)throw new Error('Swagger request did not match a declared OpenAPI operation.');
+  const selectedBase=target.origin+target.pathname.slice(0,selected.index);
+  req.headers=Object.assign({{}},req.headers||{{}},{{[NETIZEN.serverSelectionHeader]:selectedBase}});
+  req.url=window.location.origin+NETIZEN.proxyRoute+selected[0]+target.search;
   return req;
 }}
-(async()=>{{try{{await load('link',{{rel:'stylesheet',href:CONFIG.assets.stylesheet}});await load('script',{{src:CONFIG.assets.bundle}});await load('script',{{src:CONFIG.assets.preset}});SwaggerUIBundle({{url:CONFIG.specRoute,dom_id:'#swagger-ui',presets:[SwaggerUIBundle.presets.apis,SwaggerUIStandalonePreset],layout:'StandaloneLayout',tryItOutEnabled:true,persistAuthorization:true,deepLinking:true,displayRequestDuration:true,defaultModelsExpandDepth:1,defaultModelExpandDepth:2,docExpansion:'list',filter:true,validatorUrl:null,requestInterceptor}});statusEl.textContent='Swagger UI loaded from local assets.'}}catch(error){{statusEl.textContent='Swagger UI load failed: '+error.message}}}})();
-</script></body></html>"""
-    return document.encode("utf-8")
+SwaggerUIBundle({{
+  url:NETIZEN.specRoute,
+  dom_id:'#swagger-ui',
+  presets:[SwaggerUIBundle.presets.apis,SwaggerUIStandalonePreset],
+  layout:'StandaloneLayout',
+  tryItOutEnabled:true,
+  validatorUrl:null,
+  requestInterceptor
+}});
+</script>
+</body>
+</html>
+""".encode("utf-8")
 
 
-def install_swagger_assets(cache_directory: Path) -> dict[str, Asset]:
-    cache_directory.mkdir(parents=True, exist_ok=True)
-    installed = {
-        key: Asset(cache_directory / filename, content_type)
-        for key, (filename, _route, content_type) in ASSETS.items()
-    }
-    if all(asset.path.is_file() for asset in installed.values()):
-        return installed
-
-    archive_path = cache_directory / "swagger-ui-release.zip"
-    if not archive_path.is_file():
-        request = urllib.request.Request(
-            "https://api.github.com/repos/swagger-api/swagger-ui/releases/latest",
-            headers={"User-Agent": "netizen-local-swagger"},
-        )
-        with urllib.request.urlopen(request) as response:
-            release = json.load(response)
-        zipball_url = release.get("zipball_url")
-        if not zipball_url:
-            raise RuntimeError("The latest Swagger UI GitHub release did not provide zipball_url.")
-        download_path = archive_path.with_suffix(".zip.download")
-        print(f"Downloading latest Swagger UI release archive ({release.get('tag_name', 'unknown')})...")
-        try:
-            download_request = urllib.request.Request(
-                zipball_url, headers={"User-Agent": "netizen-local-swagger"}
-            )
-            with urllib.request.urlopen(download_request) as source, download_path.open("wb") as target:
-                while chunk := source.read(1024 * 1024):
-                    target.write(chunk)
-            os.replace(download_path, archive_path)
-        finally:
-            download_path.unlink(missing_ok=True)
-
-    with zipfile.ZipFile(archive_path) as archive:
-        for key, (filename, _route, _content_type) in ASSETS.items():
-            matches = [
-                name
-                for name in archive.namelist()
-                if name == f"dist/{filename}" or name.endswith(f"/dist/{filename}")
-            ]
-            if len(matches) != 1:
-                raise RuntimeError(
-                    f"Swagger UI archive must contain exactly one dist/{filename}; found {len(matches)}."
-                )
-            temporary = installed[key].path.with_suffix(installed[key].path.suffix + ".extract")
-            try:
-                with archive.open(matches[0]) as source, temporary.open("wb") as target:
-                    while chunk := source.read(1024 * 1024):
-                        target.write(chunk)
-                os.replace(temporary, installed[key].path)
-            finally:
-                temporary.unlink(missing_ok=True)
-    return installed
-
-
-class GatewayState:
+class Runtime:
     def __init__(
         self,
-        *,
-        source_spec: dict[str, Any],
-        served_spec: dict[str, Any],
-        upstream_base_url: str,
-        request_headers: dict[str, str],
-        assets: dict[str, Asset],
+        document: dict[str, Any],
+        served_document: dict[str, Any],
+        routes: list[Route],
+        default_destination: Destination,
+        configured_headers: dict[str, str],
+        assets: list[Asset],
     ) -> None:
-        self.routes = openapi_routes(source_spec)
-        if not self.routes:
-            raise ConfigurationError("The OpenAPI document contains no supported routes.")
-        self.upstream_base_url = upstream_base_url
-        self.request_headers = request_headers
-        self.assets_by_route = {
-            ASSETS[key][1]: asset for key, asset in assets.items()
-        }
-        runtime = {
-            "title": str(source_spec["info"]["title"]),
-            "specRoute": SPEC_ROUTE,
-            "forwardingRoute": FORWARDING_ROUTE,
-            "assets": {key: ASSETS[key][1] for key in ASSETS},
-            "upstreamBaseHeader": UPSTREAM_BASE_HEADER,
-            "routes": [
-                {
-                    "method": route.method,
-                    "template": route.template,
-                    "suffixPattern": route.suffix_pattern,
-                }
-                for route in sorted(
-                    self.routes, key=lambda route: (route.is_templated, -len(route.template))
-                )
-            ],
-        }
-        self.index_bytes = swagger_html(runtime["title"], html_safe_json(runtime))
-        self.spec_bytes = json.dumps(served_spec, ensure_ascii=False, indent=2).encode("utf-8")
-        self.last_request = time.monotonic()
-        self.initial_load = False
+        self.routes = routes
+        self.default_destination = default_destination
+        self.configured_headers = configured_headers
+        self.assets = {asset.route: asset for asset in assets}
+        self.index = swagger_html(
+            str(document["info"]["title"]), routes, [asset.route for asset in assets]
+        )
+        self.spec = json.dumps(served_document, ensure_ascii=False, indent=2).encode("utf-8")
+        self.last_activity = time.monotonic()
+        self.loaded = False
         self.activity_lock = threading.Lock()
 
-    def record_request(self, root: bool) -> None:
+    def record(self, initial_load: bool = False) -> None:
         with self.activity_lock:
-            self.last_request = time.monotonic()
-            if root:
-                self.initial_load = True
+            self.last_activity = time.monotonic()
+            self.loaded = self.loaded or initial_load
 
 
-class BoundedThreadingHTTPServer(http.server.ThreadingHTTPServer):
+class NetizenServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
-    allow_reuse_address = False
 
-    def __init__(self, server_address: tuple[str, int], handler: type[http.server.BaseHTTPRequestHandler], state: GatewayState):
-        self.state = state
-        self._request_slots = threading.BoundedSemaphore(MAX_CONCURRENT_REQUESTS)
-        super().__init__(server_address, handler)
-
-    def process_request(self, request: Any, client_address: Any) -> None:
-        self._request_slots.acquire()
-        try:
-            super().process_request(request, client_address)
-        except BaseException:
-            self._request_slots.release()
-            raise
-
-    def process_request_thread(self, request: Any, client_address: Any) -> None:
-        try:
-            super().process_request_thread(request, client_address)
-        finally:
-            self._request_slots.release()
+    def __init__(
+        self,
+        address: tuple[str, int],
+        handler: type[http.server.BaseHTTPRequestHandler],
+        runtime: Runtime,
+    ) -> None:
+        self.runtime = runtime
+        super().__init__(address, handler)
 
 
 class NetizenHandler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     @property
-    def state(self) -> GatewayState:
-        return self.server.state  # type: ignore[attr-defined, no-any-return]
+    def runtime(self) -> Runtime:
+        return self.server.runtime  # type: ignore[attr-defined, no-any-return]
 
     def do_GET(self) -> None:
-        self._handle()
+        self.handle_request()
 
     def do_POST(self) -> None:
-        self._handle()
+        self.handle_request()
 
     def do_PUT(self) -> None:
-        self._handle()
+        self.handle_request()
 
     def do_PATCH(self) -> None:
-        self._handle()
+        self.handle_request()
 
     def do_DELETE(self) -> None:
-        self._handle()
+        self.handle_request()
 
     def do_HEAD(self) -> None:
-        self._handle()
+        self.handle_request()
 
     def do_OPTIONS(self) -> None:
-        self._handle()
+        self.handle_request()
 
     def do_TRACE(self) -> None:
-        self._handle()
+        self.handle_request()
 
     def log_message(self, _format: str, *_args: Any) -> None:
         return
 
-    def _send_bytes(
+    def send_bytes(
         self,
         status: int,
         body: bytes,
-        content_type: str | None = None,
-        headers: Iterable[tuple[str, str]] = (),
+        response_headers: Iterable[tuple[str, str]] = (),
     ) -> None:
-        self.send_response(status)
-        if content_type:
-            self.send_header("Content-Type", content_type)
+        if not 100 <= status <= 599:
+            raise ValueError(f"Invalid HTTP response status code: {status}")
+        headers = validated_headers(response_headers, "Response")
+        headers = [(name, value) for name, value in headers if name.casefold() != "content-length"]
+        self.send_response_only(status)
         for name, value in headers:
             self.send_header(name, value)
         self.send_header("Content-Length", str(len(body)))
@@ -537,216 +711,201 @@ class NetizenHandler(http.server.BaseHTTPRequestHandler):
         if self.command != "HEAD" and body:
             self.wfile.write(body)
 
-    def _local_failure(self, status: int, code: str) -> None:
-        self._send_bytes(
-            status,
-            json.dumps({"error": code}, separators=(",", ":")).encode("utf-8"),
-            "application/json; charset=utf-8",
-        )
+    def failure(self, status: int, code: str) -> None:
+        body = json.dumps({"error": code}, separators=(",", ":")).encode("utf-8")
+        self.send_bytes(status, body, [("Content-Type", "application/json; charset=utf-8")])
 
-    def _handle(self) -> None:
+    def handle_request(self) -> None:
         target = urllib.parse.urlsplit(self.path)
         path = target.path
-        self.state.record_request(path == "/")
+        self.runtime.record(path == "/")
+        response_started = False
         try:
             if path == "/":
-                self._send_bytes(200, self.state.index_bytes, "text/html; charset=utf-8")
+                response_started = True
+                self.send_bytes(200, self.runtime.index, [("Content-Type", "text/html; charset=utf-8")])
                 return
             if path == SPEC_ROUTE:
-                self._send_bytes(200, self.state.spec_bytes, "application/json; charset=utf-8")
+                response_started = True
+                self.send_bytes(
+                    200, self.runtime.spec, [("Content-Type", "application/json; charset=utf-8")]
+                )
                 return
-            asset = self.state.assets_by_route.get(path)
+            asset = self.runtime.assets.get(path)
             if asset is not None:
-                self._send_bytes(200, asset.path.read_bytes(), asset.content_type)
+                response_started = True
+                self.send_bytes(200, asset.path.read_bytes(), [("Content-Type", asset.content_type)])
                 return
-            if path != FORWARDING_ROUTE and not path.startswith(FORWARDING_ROUTE + "/"):
-                self._local_failure(404, "route_not_found")
+
+            if path == PROXY_ROUTE:
+                api_path = "/"
+            elif path.startswith(PROXY_ROUTE + "/"):
+                api_path = path[len(PROXY_ROUTE) :]
+            else:
+                response_started = True
+                self.failure(404, "route_not_found")
                 return
-            api_path = path[len(FORWARDING_ROUTE) :] or "/"
-            route, path_matched = find_route(self.state.routes, self.command, api_path)
+
+            route, path_matched = find_route(self.runtime.routes, self.command, api_path)
             if route is None:
-                self._local_failure(
+                response_started = True
+                self.failure(
                     405 if path_matched else 404,
                     "method_not_allowed" if path_matched else "openapi_route_not_found",
                 )
                 return
             try:
-                request_base = self._request_upstream_base_url()
-            except ConfigurationError:
-                self._local_failure(400, "invalid_upstream_base")
+                destination = self.selected_destination(route)
+            except (ConfigurationError, ValueError):
+                response_started = True
+                self.failure(400, "invalid_upstream_base")
                 return
-            self._proxy(route, request_base, api_path, target.query)
+
+            response_started = True
+            self.proxy(route, destination, api_path, target.query)
         except (BrokenPipeError, ConnectionResetError):
             return
-        except Exception:
-            print("Warning: request worker failed: request_worker_failed.", file=sys.stderr)
-            try:
-                self._local_failure(500, "request_worker_failed")
-            except Exception:
-                return
+        except Exception as error:
+            print(f"Warning: local request failed: {error}", file=sys.stderr)
+            if not response_started:
+                try:
+                    self.failure(500, "local_request_failed")
+                except Exception:
+                    pass
 
-    def _request_upstream_base_url(self) -> str:
-        values = self.headers.get_all(UPSTREAM_BASE_HEADER)
+    def selected_destination(self, route: Route) -> Destination:
+        values = self.headers.get_all(SERVER_SELECTION_HEADER)
         if values is None:
-            return self.state.upstream_base_url
-        if len(values) != 1 or not values[0].strip():
+            candidate = self.runtime.default_destination.url
+        elif len(values) == 1 and values[0].strip():
+            candidate = header_value(values[0].strip(), f"Header '{SERVER_SELECTION_HEADER}'")
+        else:
             raise ConfigurationError(
-                f"Request header '{UPSTREAM_BASE_HEADER}' must contain exactly one non-empty value."
+                f"Header '{SERVER_SELECTION_HEADER}' must contain exactly one non-empty value."
             )
-        return _validate_http_base_url(
-            values[0].strip(), f"Request header '{UPSTREAM_BASE_HEADER}'"
-        )
+        return route.destination(candidate)
 
-    def _read_chunked_body(self) -> bytes:
+    def request_body(self) -> tuple[bytes, bool]:
+        transfer_encodings = self.headers.get_all("Transfer-Encoding") or []
+        content_lengths = self.headers.get_all("Content-Length") or []
+        if transfer_encodings and content_lengths:
+            raise ValueError("Request must not contain both Transfer-Encoding and Content-Length.")
+        if transfer_encodings:
+            if len(transfer_encodings) != 1 or transfer_encodings[0].casefold().strip() != "chunked":
+                raise ValueError("Unsupported request Transfer-Encoding.")
+            return self.read_chunked_body(), True
+        if not content_lengths:
+            return b"", False
+        if len(content_lengths) != 1 or not re.fullmatch(r"[0-9]+", content_lengths[0].strip()):
+            raise ValueError("Invalid request Content-Length.")
+        length = int(content_lengths[0])
+        body = self.rfile.read(length)
+        if len(body) != length:
+            raise ValueError("Request body ended before Content-Length bytes were read.")
+        return body, True
+
+    def read_chunked_body(self) -> bytes:
         chunks: list[bytes] = []
         while True:
-            size_line = self.rfile.readline(65537)
-            if not size_line or len(size_line) > 65536:
+            line = self.rfile.readline(65537)
+            if not line or len(line) > 65536 or not line.endswith(b"\r\n"):
                 raise ValueError("Invalid chunked request body.")
-            size = int(size_line.split(b";", 1)[0].strip(), 16)
+            try:
+                size = int(line[:-2].split(b";", 1)[0], 16)
+            except ValueError as error:
+                raise ValueError("Invalid chunked request body.") from error
+            if size < 0:
+                raise ValueError("Invalid chunked request body.")
             if size == 0:
-                while self.rfile.readline(65537) not in (b"\r\n", b"\n", b""):
-                    pass
-                break
+                while True:
+                    trailer = self.rfile.readline(65537)
+                    if trailer == b"\r\n":
+                        return b"".join(chunks)
+                    if not trailer or len(trailer) > 65536 or not trailer.endswith(b"\r\n"):
+                        raise ValueError("Invalid chunked request trailer.")
             chunk = self.rfile.read(size)
             if len(chunk) != size or self.rfile.read(2) != b"\r\n":
                 raise ValueError("Invalid chunked request body.")
             chunks.append(chunk)
-        return b"".join(chunks)
 
-    def _request_body(self) -> bytes:
-        transfer_encoding = self.headers.get("Transfer-Encoding", "")
-        if transfer_encoding:
-            if transfer_encoding.casefold().strip() != "chunked":
-                raise ValueError("Unsupported request Transfer-Encoding.")
-            return self._read_chunked_body()
-        content_length = self.headers.get("Content-Length")
-        if content_length is None:
-            return b""
-        length = int(content_length)
-        if length < 0:
-            raise ValueError("Invalid Content-Length.")
-        body = self.rfile.read(length)
-        if len(body) != length:
-            raise ValueError("Request body ended before Content-Length bytes were read.")
-        return body
-
-    def _proxy(self, route: Route, base_url: str, api_path: str, query: str) -> None:
-        upstream_request: http.client.HTTPConnection | None = None
+    def proxy(self, route: Route, destination: Destination, api_path: str, query: str) -> None:
+        connection: http.client.HTTPConnection | None = None
         try:
-            body = self._request_body()
-            parsed_base = urllib.parse.urlsplit(base_url)
-            base_path = parsed_base.path.rstrip("/")
-            upstream_path = (base_path + api_path) or "/"
-            if query:
-                upstream_path += "?" + query
-
-            raw_headers = list(self.headers.raw_items())
-            excluded = hop_by_hop_names(raw_headers)
+            inbound = validated_headers(self.headers.raw_items(), "Request")
+            body, had_framing = self.request_body()
+            excluded = hop_by_hop_names(inbound)
             excluded.update(
-                {
-                    "host",
-                    "content-length",
-                    "accept-encoding",
-                    "content-type",
-                    UPSTREAM_BASE_HEADER.casefold(),
-                }
+                {"host", "content-length", SERVER_SELECTION_HEADER.casefold()}
             )
-            forwarded = [(name, value) for name, value in raw_headers if name.casefold() not in excluded]
-            caller_content_type = self.headers.get("Content-Type")
-
-            configured_by_name = {
-                name.casefold(): (name, value) for name, value in self.state.request_headers.items()
+            configured = {
+                name.casefold(): (name, value)
+                for name, value in self.runtime.configured_headers.items()
             }
-            forwarded = [
-                (name, value) for name, value in forwarded if name.casefold() not in configured_by_name
+            outbound = [
+                (name, value)
+                for name, value in inbound
+                if name.casefold() not in excluded and name.casefold() not in configured
             ]
-            configured_content_type = None
-            for folded, (name, value) in configured_by_name.items():
-                if folded == "content-type":
-                    configured_content_type = value
-                elif folded not in {"host", "content-length", "accept-encoding"}:
-                    forwarded.append((name, value))
+            outbound.extend(configured.values())
+            has_content_metadata = any(name.casefold().startswith("content-") for name, _ in outbound)
 
-            has_content_metadata = bool(
-                caller_content_type
-                or configured_content_type
-                or any(name.casefold().startswith("content-") for name, _value in forwarded)
-            )
-            content_type = configured_content_type or caller_content_type
-            if body and not content_type and route.request_content_types:
-                content_type = route.request_content_types[0]
-            if content_type:
-                has_content_metadata = True
+            path = destination.path + api_path
+            if not path:
+                path = "/"
+            if query:
+                path += "?" + query
 
             connection_type: type[http.client.HTTPConnection]
             connection_type = (
-                http.client.HTTPSConnection if parsed_base.scheme == "https" else http.client.HTTPConnection
+                http.client.HTTPSConnection
+                if destination.scheme == "https"
+                else http.client.HTTPConnection
             )
-            kwargs: dict[str, Any] = {"timeout": OUTBOUND_TIMEOUT_SECONDS}
-            if parsed_base.scheme == "https":
-                kwargs["context"] = ssl.create_default_context()
-            upstream_request = connection_type(parsed_base.hostname, parsed_base.port, **kwargs)
-            upstream_request.putrequest(self.command, upstream_path, skip_accept_encoding=True)
-            for name, value in forwarded:
-                upstream_request.putheader(name, value)
-            if body or has_content_metadata:
-                upstream_request.putheader("Content-Length", str(len(body)))
-            if content_type:
-                upstream_request.putheader("Content-Type", content_type)
-            upstream_request.endheaders(body if body else None)
+            arguments: dict[str, Any] = {"timeout": OUTBOUND_TIMEOUT_SECONDS}
+            if destination.scheme == "https":
+                arguments["context"] = ssl.create_default_context()
+            connection = connection_type(destination.host, destination.port, **arguments)
+            connection.putrequest(self.command, path, skip_accept_encoding=True)
+            for name, value in outbound:
+                connection.putheader(name, value)
+            if body or had_framing or has_content_metadata:
+                connection.putheader("Content-Length", str(len(body)))
+            connection.endheaders(body if body else None)
 
-            upstream_response = upstream_request.getresponse()
-            raw_body = upstream_response.read()
-            response_headers = upstream_response.getheaders()
-            excluded_response = hop_by_hop_names(response_headers)
-            excluded_response.update({"content-length", "content-type"})
+            upstream = connection.getresponse()
+            response_body = upstream.read()
+            response_headers = validated_headers(upstream.getheaders(), "Upstream response")
             content_types = [
                 value for name, value in response_headers if name.casefold() == "content-type"
             ]
-            safe_headers = [
+            if len(content_types) > 1:
+                raise ValueError("Upstream response contained multiple Content-Type values.")
+            excluded_response = hop_by_hop_names(response_headers)
+            excluded_response.update({"content-length", "content-type"})
+            response_headers = [
                 (name, value)
                 for name, value in response_headers
                 if name.casefold() not in excluded_response
             ]
-            self._send_bytes(
-                upstream_response.status,
-                raw_body,
-                content_types[0] if content_types else None,
-                safe_headers,
-            )
-        except Exception:
-            print("Warning: upstream forwarding failed: upstream_forwarding_failed.", file=sys.stderr)
-            self._local_failure(502, "upstream_forwarding_failed")
+            if content_types:
+                response_headers.append(("Content-Type", content_types[0]))
+            self.send_bytes(upstream.status, response_body, response_headers)
+        except (OSError, http.client.HTTPException, ssl.SSLError, ValueError) as error:
+            print(f"Warning: upstream request failed: {error}", file=sys.stderr)
+            self.failure(502, "upstream_request_failed")
         finally:
-            if upstream_request is not None:
-                upstream_request.close()
+            if connection is not None:
+                connection.close()
 
 
-def parse_arguments(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Serve Netizen Swagger UI and its local gateway.")
-    parser.add_argument(
-        "-c",
-        "--config",
-        help="Optional service configuration JSON document (default: adjacent netizen.config.json)",
-    )
-    parser.add_argument(
-        "-s",
-        "--spec",
-        help="OpenAPI document; takes precedence over config specPath and adjacent discovery",
-    )
-    parser.add_argument("-p", "--port", type=int, default=8080, help="Preferred loopback port")
-    parser.add_argument(
-        "-k", "--keep-alive", action="store_true", help="Disable the 120-second inactivity shutdown"
-    )
-    return parser.parse_args(argv)
-
-
-def build_state(config_path: Path, selected_spec: Path | None = None) -> tuple[GatewayState, Path, str]:
+def load_runtime(
+    script_directory: Path,
+    config_path: Path,
+    explicit_spec: str | None,
+) -> tuple[Runtime, Path, str]:
     config_path = config_path.resolve()
     if not config_path.parent.is_dir():
         raise ConfigurationError(f"Configuration directory not found: {config_path.parent}")
-
     config_exists = config_path.is_file()
     if config_exists:
         with config_path.open(encoding="utf-8-sig") as stream:
@@ -756,138 +915,170 @@ def build_state(config_path: Path, selected_spec: Path | None = None) -> tuple[G
     else:
         settings = {
             "specPath": None,
-            "upstream": {
-                "baseUrl": None,
-                "requestHeaders": {},
-            },
+            "upstream": {"baseUrl": None, "requestHeaders": {}},
         }
 
-    configured_spec = settings.get("specPath")
-    if selected_spec is not None:
-        spec_path = resolve_config_path(Path.cwd(), str(selected_spec))
-    elif configured_spec is not None and str(configured_spec).strip():
-        spec_path = resolve_config_path(config_path.parent, str(configured_spec))
-    else:
-        script_directory = Path(__file__).resolve().parent
-        discovery_pattern = re.compile(
-            r"(?:^|[_-])openapi[_-]v\d+(?:\.\d+)+.*\.json$", re.IGNORECASE
-        )
-        discovered_specs = sorted(
-            (
-                candidate
-                for candidate in script_directory.glob("*.json")
-                if candidate.is_file() and discovery_pattern.search(candidate.name)
-            ),
-            key=lambda candidate: candidate.name,
-        )
-        if not discovered_specs:
-            raise ConfigurationError(
-                "No OpenAPI document was selected: supply --spec, set config specPath, "
-                "or place exactly one versioned OpenAPI JSON file beside the launcher."
-            )
-        if len(discovered_specs) > 1:
-            names = ", ".join(candidate.name for candidate in discovered_specs)
-            raise ConfigurationError(
-                f"Multiple adjacent OpenAPI documents were found ({names}): "
-                "supply --spec or set config specPath."
-            )
-        spec_path = discovered_specs[0].resolve()
+    upstream = settings.get("upstream")
+    if upstream is None:
+        upstream = {"baseUrl": None, "requestHeaders": {}}
+        settings["upstream"] = upstream
+    if not isinstance(upstream, dict):
+        raise ConfigurationError("Config upstream must be an object or null.")
+    configured_headers = validate_configured_headers(upstream.get("requestHeaders"))
 
+    if explicit_spec is not None:
+        spec_path = resolve_path(Path.cwd(), explicit_spec)
+    else:
+        configured_spec = settings.get("specPath")
+        if configured_spec is not None and not isinstance(configured_spec, str):
+            raise ConfigurationError("Config specPath must be a string or null.")
+        if isinstance(configured_spec, str) and configured_spec.strip():
+            spec_path = resolve_path(config_path.parent, configured_spec)
+        else:
+            pattern = re.compile(r"_openapi_v\d+(?:\.\d+)+\.json$", re.IGNORECASE)
+            discovered = sorted(
+                (
+                    path
+                    for path in script_directory.glob("*.json")
+                    if path.is_file() and pattern.search(path.name)
+                ),
+                key=lambda path: path.name.casefold(),
+            )
+            if not discovered:
+                raise ConfigurationError(
+                    "No OpenAPI document was selected: use --spec, set config specPath, "
+                    "or place exactly one versioned OpenAPI JSON file beside serve.py."
+                )
+            if len(discovered) != 1:
+                raise ConfigurationError(
+                    "Multiple adjacent OpenAPI documents were found "
+                    f"({', '.join(path.name for path in discovered)}): use --spec or config specPath."
+                )
+            spec_path = discovered[0].resolve()
     if not spec_path.is_file():
-        raise ConfigurationError(f"Required file not found: {spec_path}")
-    source_json = spec_path.read_text(encoding="utf-8-sig")
-    spec = json.loads(source_json)
-    require_properties(spec, ("openapi", "info", "paths"), "OpenAPI document.")
-    require_properties(spec["info"], ("title",), "OpenAPI document.info.")
+        raise ConfigurationError(f"OpenAPI document not found: {spec_path}")
+
+    source = spec_path.read_text(encoding="utf-8-sig")
+    document = json.loads(source)
+    if not isinstance(document, dict):
+        raise ConfigurationError("The OpenAPI document root must be an object.")
+    for name in ("openapi", "info", "paths"):
+        if name not in document or document[name] is None:
+            raise ConfigurationError(f"OpenAPI document property '{name}' is required.")
+    if not isinstance(document["info"], dict) or not isinstance(document["info"].get("title"), str):
+        raise ConfigurationError("OpenAPI document property 'info.title' is required.")
+    if not document["info"]["title"].strip():
+        raise ConfigurationError("OpenAPI document property 'info.title' is required.")
+
+    default_destination, configured_base = configured_default(document, upstream)
+    routes = build_routes(document, configured_base)
+    # The default is subjected to the same operation allowlist at request time;
+    # this validates its syntax before config creation without inventing routes.
+    served_document = runtime_spec(document, configured_base)
 
     if not config_exists:
-        try:
-            relative_spec_path = os.path.relpath(spec_path, config_path.parent)
-        except ValueError:
-            relative_spec_path = str(spec_path)
-        relative_spec_path = relative_spec_path.replace(os.sep, "/")
-        if not Path(relative_spec_path).is_absolute() and not relative_spec_path.startswith("."):
-            relative_spec_path = f"./{relative_spec_path}"
-        settings["specPath"] = relative_spec_path
-        temporary_config_path = config_path.with_name(config_path.name + ".new")
-        try:
-            temporary_config_path.write_text(
-                json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
-                encoding="utf-8",
-            )
-            temporary_config_path.replace(config_path)
-        finally:
-            temporary_config_path.unlink(missing_ok=True)
+        settings["specPath"] = relative_config_spec(config_path.parent, spec_path)
+        upstream.setdefault("baseUrl", None)
+        upstream.setdefault("requestHeaders", {})
+        write_config_atomic(config_path, settings)
         print(f"Created configuration: {config_path}")
 
-    upstream = settings.get("upstream")
-    upstream_base_url, explicitly_configured = resolve_upstream_base_url(spec, upstream)
-    request_headers = validate_request_headers(
-        upstream.get("requestHeaders") if isinstance(upstream, dict) else None
-    )
-    served_spec = (
-        runtime_openapi_document(spec, upstream_base_url) if explicitly_configured else copy.deepcopy(spec)
-    )
-    assets = install_swagger_assets(Path(__file__).resolve().parent / ".swagger-ui")
+    assets = install_swagger_ui(script_directory / ".swagger-ui")
     return (
-        GatewayState(
-            source_spec=spec,
-            served_spec=served_spec,
-            upstream_base_url=upstream_base_url,
-            request_headers=request_headers,
-            assets=assets,
+        Runtime(
+            document,
+            served_document,
+            routes,
+            default_destination,
+            configured_headers,
+            assets,
         ),
         spec_path,
-        str(spec["openapi"]),
+        str(document["openapi"]),
     )
 
 
-def bind_server(preferred_port: int, state: GatewayState) -> tuple[BoundedThreadingHTTPServer, int]:
+def port_number(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("port must be an integer") from error
+    if not 1 <= port <= 65525:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65525")
+    return port
+
+
+def arguments(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Open a Netizen document in a local Swagger UI.")
+    parser.add_argument("-c", "--config", help="Configuration file (default: adjacent config.json)")
+    parser.add_argument(
+        "-s", "--spec", help="OpenAPI document; takes precedence over config and discovery"
+    )
+    parser.add_argument("-p", "--port", type=port_number, default=8080, help="Preferred loopback port")
+    parser.add_argument(
+        "-k",
+        "--keep-alive",
+        action="store_true",
+        help="Disable the 120-second post-load inactivity shutdown",
+    )
+    return parser.parse_args(argv)
+
+
+def bind(runtime: Runtime, preferred: int) -> tuple[NetizenServer, int]:
     last_error: OSError | None = None
-    for port in range(preferred_port, preferred_port + 11):
+    for port in range(preferred, preferred + 11):
         try:
-            return BoundedThreadingHTTPServer(("127.0.0.1", port), NetizenHandler, state), port
+            return NetizenServer(("127.0.0.1", port), NetizenHandler, runtime), port
         except OSError as error:
             last_error = error
     raise OSError(
-        f"Could not bind to any port in range {preferred_port}-{preferred_port + 10}. {last_error}"
+        f"Could not bind to any port in range {preferred}-{preferred + 10}. {last_error}"
     )
 
 
-def idle_watcher(server: BoundedThreadingHTTPServer, state: GatewayState) -> None:
-    while not getattr(server, "_BaseServer__shutdown_request", False):
+def idle_watcher(server: NetizenServer, runtime: Runtime) -> None:
+    while True:
         time.sleep(1)
-        with state.activity_lock:
-            expired = state.initial_load and time.monotonic() - state.last_request >= IDLE_TIMEOUT_SECONDS
+        with runtime.activity_lock:
+            expired = runtime.loaded and time.monotonic() - runtime.last_activity >= IDLE_TIMEOUT_SECONDS
         if expired:
             print(f"No activity for {IDLE_TIMEOUT_SECONDS} seconds - shutting down.")
             server.shutdown()
             return
 
 
+def open_browser(url: str) -> None:
+    try:
+        if not webbrowser.open(url):
+            raise RuntimeError("no browser accepted the URL")
+    except Exception:
+        print(f"Warning: could not open the browser automatically. Open {url} manually.", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = parse_arguments(argv)
+    args = arguments(argv)
     if args.config is not None and not args.config.strip():
-        raise ConfigurationError("--config must name a configuration document when supplied.")
+        raise ConfigurationError("--config must name a configuration file when supplied.")
     if args.spec is not None and not args.spec.strip():
         raise ConfigurationError("--spec must name an OpenAPI document when supplied.")
 
     script_directory = Path(__file__).resolve().parent
     config_path = (
-        resolve_config_path(Path.cwd(), args.config)
+        resolve_path(Path.cwd(), args.config)
         if args.config is not None
-        else script_directory / "netizen.config.json"
+        else script_directory / "config.json"
     )
-    selected_spec = Path(args.spec) if args.spec is not None else None
-    state, spec_path, openapi_version = build_state(config_path, selected_spec)
-    server, port = bind_server(args.port, state)
-    browser_url = f"http://127.0.0.1:{port}/"
-
+    runtime, spec_path, openapi_version = load_runtime(
+        script_directory, config_path, args.spec
+    )
+    server, port = bind(runtime, args.port)
+    url = f"http://127.0.0.1:{port}/"
     print(f"Serving configuration: {config_path.resolve()}")
     print(f"Serving OpenAPI document: {spec_path}")
-    print(f"Loaded OpenAPI routes: {len(state.routes)}")
+    print(f"Default upstream: {runtime.default_destination.url}")
+    print(f"Loaded OpenAPI operations: {len(runtime.routes)}")
     print(f"OpenAPI version: {openapi_version}")
-    print(f"Open: {browser_url}")
+    print(f"Open: {url}")
     if args.keep_alive:
         print("KeepAlive enabled - Ctrl+C to stop.")
     else:
@@ -895,9 +1086,9 @@ def main(argv: list[str] | None = None) -> int:
             f"Auto-stops after {IDLE_TIMEOUT_SECONDS} seconds of inactivity following the initial page load."
         )
 
-    threading.Timer(0.5, lambda: webbrowser.open(browser_url)).start()
+    threading.Timer(0.5, open_browser, args=(url,)).start()
     if not args.keep_alive:
-        threading.Thread(target=idle_watcher, args=(server, state), daemon=True).start()
+        threading.Thread(target=idle_watcher, args=(server, runtime), daemon=True).start()
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
@@ -910,4 +1101,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except (ConfigurationError, json.JSONDecodeError, OSError, RuntimeError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        raise SystemExit(1) from error

@@ -141,12 +141,18 @@ def write_json(path: Path, value: Any) -> None:
     )
 
 
-def create_zip(path: Path, spec_path: Path, spec_name: str) -> None:
+def guide_archive_source(path: Path) -> Path:
+    if path.is_symlink():
+        return path
+    return (path.parent / path.read_text(encoding="utf-8").strip()).resolve()
+
+
+def create_zip(path: Path, spec_path: Path, spec_name: str, guide_path: Path) -> None:
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         archive.write(spec_path, spec_name)
         archive.write(ROOT / "serve.ps1", "serve.ps1")
         archive.write(ROOT / "serve.py", "serve.py")
-        archive.write(ROOT / "AGENTS.md", "AGENTS.md")
+        archive.write(guide_archive_source(guide_path), "AGENTS.md")
 
 
 def is_root_guide_link(path: Path) -> bool:
@@ -174,12 +180,11 @@ def discover_sources() -> dict[str, list[Path]]:
             continue
         guide = directory / "AGENTS.md"
         allowed_entries = set(specs)
-        if guide.exists() or guide.is_symlink():
-            if not is_root_guide_link(guide):
-                raise BuildError(
-                    f"{directory.name}/AGENTS.md must be a symlink to ../AGENTS.md."
-                )
-            allowed_entries.add(guide)
+        if not (guide.exists() or guide.is_symlink()) or not is_root_guide_link(guide):
+            raise BuildError(
+                f"{directory.name}/AGENTS.md must be a symlink to ../AGENTS.md."
+            )
+        allowed_entries.add(guide)
         other_entries = sorted(entry.name for entry in directory.iterdir() if entry not in allowed_entries)
         if other_entries:
             raise BuildError(
@@ -247,7 +252,12 @@ def build(pages_dir: Path, dist_dir: Path) -> None:
             write_json(published_spec_path, published_spec)
 
             artifact_name = f"{source_path.stem}.zip"
-            create_zip(dist_dir / artifact_name, published_spec_path, source_path.name)
+            create_zip(
+                dist_dir / artifact_name,
+                published_spec_path,
+                source_path.name,
+                source_path.parent / "AGENTS.md",
+            )
             editions.append(
                 {
                     "specFile": source_path.name,

@@ -46,10 +46,10 @@ pwsh ./serve.ps1
 python ./serve.py
 ```
 
-## `netizen.config.json`
+## `config.json`
 
 Unless `-Config` or `--config` names another path, the launcher uses
-`netizen.config.json` beside itself. If the file is absent, it is created only
+`config.json` beside itself. If the file is absent, it is created only
 after the spec has been resolved and validated unambiguously.
 
 The generated shape is:
@@ -72,14 +72,15 @@ The generated shape is:
 - `upstream.requestHeaders` adds or replaces outbound request headers. It is the
   local place for API keys or other required headers.
 
-Treat `netizen.config.json` as local state. It may contain credentials; do not
+Treat `config.json` as local state. It may contain credentials; do not
 publish, commit, or copy it into the OpenAPI document. `.swagger-ui/` is also
 generated local state containing cached UI assets.
 
 ## Repository context
 
-Vendor directories contain specs and an `AGENTS.md` symlink to this file. Root
-`serve.ps1`, `serve.py`, and `AGENTS.md` are copied into every generated ZIP.
+Vendor directories contain specs and an `AGENTS.md` symlink to this file. The
+vendor guide entry is included in each generated ZIP through that symlink. Root
+`serve.ps1` and `serve.py` are also included in every generated ZIP.
 `.github/scripts/build.py` validates sources and generates the public catalog,
 stamped specs, and one standalone ZIP per spec.
 

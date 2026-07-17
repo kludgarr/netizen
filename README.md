@@ -27,7 +27,7 @@ pwsh serve.ps1
 ```
 
 On first run, the launcher discovers the packaged spec, creates
-`netizen.config.json`, and downloads Swagger UI assets into `.swagger-ui/`.
+`config.json`, and downloads Swagger UI assets into `.swagger-ui/`.
 Subsequent runs can use the cached assets.
 
 The scripts auto-open a browser, proxy API calls to avoid CORS restrictions, and shut down after 120 seconds of inactivity. Use `-k` / `-KeepAlive` to run indefinitely, or `-p` / `-Port` to change the default port (8080).

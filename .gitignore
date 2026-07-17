@@ -2,3 +2,6 @@ CLAUDE.md
 *.local
 __pycache__/
 *.py[cod]
+/config.json
+/.swagger-ui/
+.agents/
