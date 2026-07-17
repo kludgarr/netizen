@@ -1,5 +1,5 @@
 {
-  "openapi": "3.1.0",
+  "openapi": "3.0.3",
   "info": {
     "title": "Schedules Direct JSON API",
     "version": "20141201",
@@ -78,11 +78,12 @@
   "paths": {
     "/token": {
       "post": {
+        "operationId": "obtainToken",
         "tags": [
           "Authentication"
         ],
         "summary": "Obtain an authentication token",
-        "description": "This is the first call your client must make \u00e2\u20ac\u201d almost all other endpoints require a token. Authenticates with username and SHA1-hashed password (lowercase hex, 40 characters). A token is valid for 24 hours from the time it was first granted. Subsequent calls with the same credentials during the 24-hour window return the existing token. A token becomes invalid when: (1) 24 hours elapse since it was first granted, or (2) a new token is explicitly requested via the `newToken` field. If the service is offline (code 3000), disconnect and retry in 30 minutes \u00e2\u20ac\u201d a token may still be returned for later use. There is a limited number of token requests allowed per 24-hour period; once obtained, reuse the token until it expires.",
+        "description": "This is the first call your client must make; almost all other endpoints require a token. Authenticates with username and SHA1-hashed password (lowercase hex, 40 characters). A token is valid for 24 hours from the time it was first granted. Subsequent calls with the same credentials during the 24-hour window return the existing token. A token becomes invalid when: (1) 24 hours elapse since it was first granted, or (2) a new token is explicitly requested via the `newToken` field. If the service is offline (code 3000), disconnect and retry in 30 minutes; a token may still be returned for later use. There is a limited number of token requests allowed per 24-hour period; once obtained, reuse the token until it expires.",
         "security": [],
         "requestBody": {
           "required": true,
@@ -112,7 +113,8 @@
                 }
               }
             }
-          }
+          },
+          "description": "Account credentials. Password must be lowercase sha1 hex (40 characters)."
         },
         "responses": {
           "200": {
@@ -140,6 +142,7 @@
     },
     "/status": {
       "get": {
+        "operationId": "getStatus",
         "tags": [
           "Status"
         ],
@@ -171,6 +174,7 @@
     },
     "/ip_isblocked": {
       "get": {
+        "operationId": "getIpBlockStatus",
         "tags": [
           "Status"
         ],
@@ -192,6 +196,9 @@
                     "blocked_on_load_balancer": {
                       "type": "boolean",
                       "example": false
+                    },
+                    "serverID": {
+                      "type": "string"
                     }
                   }
                 }
@@ -203,6 +210,7 @@
     },
     "/version/{clientName}": {
       "get": {
+        "operationId": "getClientVersion",
         "tags": [
           "Status"
         ],
@@ -217,7 +225,8 @@
             "schema": {
               "type": "string"
             },
-            "example": "mfdb-json"
+            "example": "mfdb-json",
+            "description": "Registered client application name (e.g. \"example-client\")."
           }
         ],
         "responses": {
@@ -271,6 +280,7 @@
     },
     "/available": {
       "get": {
+        "operationId": "getAvailableServices",
         "tags": [
           "Available"
         ],
@@ -296,6 +306,7 @@
     },
     "/available/countries": {
       "get": {
+        "operationId": "getAvailableCountries",
         "tags": [
           "Available"
         ],
@@ -324,6 +335,7 @@
     },
     "/available/languages": {
       "get": {
+        "operationId": "getAvailableLanguages",
         "tags": [
           "Available"
         ],
@@ -350,6 +362,7 @@
     },
     "/available/dvb-s": {
       "get": {
+        "operationId": "getAvailableSatellites",
         "tags": [
           "Available"
         ],
@@ -363,7 +376,10 @@
               "application/json": {
                 "schema": {
                   "type": "array",
-                  "items": {}
+                  "items": {
+                    "type": "object",
+                    "description": "DVB-S satellite entry. Shape not yet captured (empty array returned for accounts without DVB-S coverage)."
+                  }
                 }
               }
             }
@@ -373,11 +389,12 @@
     },
     "/transmitters/{iso3166alpha3}": {
       "get": {
+        "operationId": "getTransmitters",
         "tags": [
           "Available"
         ],
         "summary": "Get DVB-T transmitters for a country",
-        "description": "Returns a map of transmitter names to lineup IDs for the specified country. DVB-T (Freeview) infrastructure only. Supported countries are declared by the service via GET /available \u00e2\u20ac\u201d currently GBR only. Returns 403/2050 INVALID_PARAMETER:COUNTRY for unsupported countries; response body includes the allowed country set.",
+        "description": "Returns a map of transmitter names to lineup IDs for the specified country. DVB-T (Freeview) infrastructure only. Supported countries are declared by the service via GET /available; currently GBR only. Returns 403/2050 INVALID_PARAMETER:COUNTRY for unsupported countries; response body includes the allowed country set.",
         "security": [],
         "parameters": [
           {
@@ -423,6 +440,7 @@
     },
     "/headends": {
       "get": {
+        "operationId": "getHeadends",
         "tags": [
           "Lineups"
         ],
@@ -471,6 +489,7 @@
     },
     "/lineups/preview/{lineupId}": {
       "get": {
+        "operationId": "previewLineup",
         "tags": [
           "Lineups"
         ],
@@ -507,6 +526,7 @@
     },
     "/lineups/{lineupId}": {
       "get": {
+        "operationId": "getLineupMapping",
         "tags": [
           "Lineups"
         ],
@@ -550,6 +570,7 @@
         }
       },
       "put": {
+        "operationId": "addLineup",
         "tags": [
           "Lineups"
         ],
@@ -581,6 +602,7 @@
         }
       },
       "delete": {
+        "operationId": "deleteLineup",
         "tags": [
           "Lineups"
         ],
@@ -614,6 +636,7 @@
     },
     "/lineups": {
       "get": {
+        "operationId": "getLineups",
         "tags": [
           "Lineups"
         ],
@@ -635,6 +658,7 @@
     },
     "/programs": {
       "post": {
+        "operationId": "getPrograms",
         "tags": [
           "Programs"
         ],
@@ -649,7 +673,7 @@
                 "items": {
                   "type": "string",
                   "description": "14-character programID",
-                  "pattern": "^(EP|SH|MV|SP)\\d{10}$"
+                  "pattern": "^(EP|SH|MV|SP)\\d{12}$"
                 },
                 "maxItems": 5000
               },
@@ -658,7 +682,8 @@
                 "MV008961210000"
               ]
             }
-          }
+          },
+          "description": "Array of programIDs to fetch (max 5000)."
         },
         "responses": {
           "200": {
@@ -679,6 +704,7 @@
     },
     "/metadata/description/": {
       "post": {
+        "operationId": "getDescriptions",
         "tags": [
           "Programs"
         ],
@@ -701,7 +727,8 @@
                 "EP000186930001"
               ]
             }
-          }
+          },
+          "description": "Array of EP-prefix programIDs whose generic series descriptions are requested (max 500)."
         },
         "responses": {
           "200": {
@@ -722,6 +749,7 @@
     },
     "/xref": {
       "post": {
+        "operationId": "getLanguageCrossReferences",
         "tags": [
           "Programs"
         ],
@@ -743,7 +771,8 @@
                 "EP006883590001"
               ]
             }
-          }
+          },
+          "description": "Array of programIDs to look up alternate-language versions for."
         },
         "responses": {
           "200": {
@@ -767,6 +796,7 @@
     },
     "/schedules": {
       "post": {
+        "operationId": "getSchedules",
         "tags": [
           "Schedules"
         ],
@@ -784,7 +814,8 @@
                 "maxItems": 5000
               }
             }
-          }
+          },
+          "description": "Array of {stationID, date?} entries selecting which schedules to fetch (max 5000)."
         },
         "responses": {
           "200": {
@@ -805,6 +836,7 @@
     },
     "/schedules/md5": {
       "post": {
+        "operationId": "getSchedulesMd5",
         "tags": [
           "Schedules"
         ],
@@ -822,7 +854,8 @@
                 "maxItems": 5000
               }
             }
-          }
+          },
+          "description": "Array of {stationID, date?} entries to retrieve MD5 change-detection hashes for (max 5000)."
         },
         "responses": {
           "200": {
@@ -846,11 +879,12 @@
     },
     "/metadata/stillRunning/{programId}": {
       "get": {
+        "operationId": "getSportsEventStatus",
         "tags": [
           "Sports"
         ],
         "summary": "Check if a sports event is still in progress",
-        "description": "Returns the live status and current score for an in-progress sporting event. Supports NFL, NHL, NBA, and MLB (as of 2015-11-28). Response codes: 0=OK (in progress or complete), 6001=PROGRAMID_QUEUED (retry in 30s), 6002=FUTURE_PROGRAM, 6000=INVALID_PROGRAMID (untracked sport or invalid ID). NOTE: empirically tested with valid NHL playoff game program IDs during a live game (2026-04-20) \u00e2\u20ac\u201d both returned HTTP 404 text/html rather than the documented JSON responses. Endpoint behavior may have drifted from documentation. Do not rely on this endpoint without live validation.",
+        "description": "Returns the live status and current score for an in-progress sporting event. Supports NFL, NHL, NBA, and MLB (as of 2015-11-28). Response codes: 0=OK (in progress or complete), 6001=PROGRAMID_QUEUED (retry in 30s), 6002=FUTURE_PROGRAM, 6000=INVALID_PROGRAMID (untracked sport or invalid ID). NOTE: empirically tested with valid NHL playoff game program IDs during a live game (2026-04-20); both returned HTTP 404 text/html rather than the documented JSON responses. Endpoint behavior may have drifted from documentation. Do not rely on this endpoint without live validation.",
         "parameters": [
           {
             "name": "programId",
@@ -875,7 +909,7 @@
             }
           },
           "404": {
-            "description": "Empirically observed \u00e2\u20ac\u201d returns text/html 404 for valid sports event program IDs. Not documented in SD wiki. Behavior unresolved.",
+            "description": "Empirically observed; returns text/html 404 for valid sports event program IDs. Not documented in SD wiki. Behavior unresolved.",
             "content": {
               "text/html": {
                 "schema": {
@@ -889,11 +923,12 @@
     },
     "/metadata/programs/{programId}": {
       "get": {
+        "operationId": "getProgramImages",
         "tags": [
           "Images"
         ],
         "summary": "Get image metadata for a single program",
-        "description": "Returns available image metadata (URIs, dimensions, categories) for a single program ID or rootId. To receive episode-specific artwork (hasEpisodeArtwork), movie artwork (hasMovieArtwork), or sports artwork (hasSportsArtwork), send the full 14-character programID. Sending only the left-most 10 characters is deprecated and will return series-level artwork only. The response may include a rootId field that can be used to retrieve related artwork via this same endpoint. URIs in the response are ephemeral \u00e2\u20ac\u201d do not store them permanently.",
+        "description": "Returns available image metadata (URIs, dimensions, categories) for a single program ID or rootId. To receive episode-specific artwork (hasEpisodeArtwork), movie artwork (hasMovieArtwork), or sports artwork (hasSportsArtwork), send the full 14-character programID. Sending only the left-most 10 characters is deprecated and will return series-level artwork only. The response may include a rootId field that can be used to retrieve related artwork via this same endpoint. URIs in the response are ephemeral; do not store them permanently.",
         "parameters": [
           {
             "name": "programId",
@@ -925,11 +960,12 @@
     },
     "/metadata/programs/": {
       "post": {
+        "operationId": "getProgramsImages",
         "tags": [
           "Images"
         ],
         "summary": "Get image metadata for multiple programs (batch)",
-        "description": "Returns image metadata for up to 500 program IDs. Use full 14-character program IDs \u00e2\u20ac\u201d sending the left-most 10 characters is deprecated and will return only series-level artwork, not episode-specific images. Each element in the response is JSON, but note that when errors occur (e.g., invalid programID), the error response for that element is inline alongside successful results. URIs in the response are ephemeral \u00e2\u20ac\u201d do not store them permanently.",
+        "description": "Returns image metadata for up to 500 program IDs. Use full 14-character program IDs; sending the left-most 10 characters is deprecated and will return only series-level artwork, not episode-specific images. Each element in the response is JSON, but note that when errors occur (e.g., invalid programID), the error response for that element is inline alongside successful results. URIs in the response are ephemeral; do not store them permanently.",
         "requestBody": {
           "required": true,
           "content": {
@@ -947,7 +983,8 @@
                 "EP003851900001"
               ]
             }
-          }
+          },
+          "description": "Array of full 14-character programIDs to fetch image metadata for (max 500)."
         },
         "responses": {
           "200": {
@@ -968,11 +1005,12 @@
     },
     "/image/{uri}": {
       "get": {
+        "operationId": "getImage",
         "tags": [
           "Images"
         ],
         "summary": "Get an image by URI",
-        "description": "Redirects (HTTP 303) to an S3 URL for the requested image. The redirect URL is valid for 120 seconds \u00e2\u20ac\u201d do not cache it. Token can be provided via header or `?token=` query parameter. If the URI from the image metadata is already a complete S3 URL (contains 'https://'), access it directly instead of using this endpoint. There is a daily image download limit per subscriber (counter resets at 00:00Z). Exceeding it returns code 5002/5003 \u00e2\u20ac\u201d stop requests immediately or the account will be blocked.",
+        "description": "Redirects (HTTP 303) to an S3 URL for the requested image. The redirect URL is valid for 120 seconds; do not cache it. Token can be provided via header or `?token=` query parameter. If the URI from the image metadata is already a complete S3 URL (contains 'https://'), access it directly instead of using this endpoint. There is a daily image download limit per subscriber (counter resets at 00:00Z). Exceeding it returns code 5002/5003; stop requests immediately or the account will be blocked.",
         "parameters": [
           {
             "name": "uri",
@@ -1013,11 +1051,12 @@
     },
     "/metadata/celebrity/{personId}": {
       "get": {
+        "operationId": "getCelebrityImages",
         "tags": [
           "Celebrity"
         ],
         "summary": "Get images for a celebrity",
-        "description": "Returns available images for a celebrity by their personId. The personId is preferred over nameId \u00e2\u20ac\u201d a person may have multiple nameIds (due to marriage, alternate spellings, etc.) but a single personId. Response may include rootId and title fields linking images back to specific programs. URIs in the response are ephemeral \u00e2\u20ac\u201d do not store them permanently. Note: the Retrieving Images wiki page indicates token is not required for this endpoint, while the main API page indicates it is required. Behavior may vary \u00e2\u20ac\u201d send the token if available.",
+        "description": "Returns available images for a celebrity by their personId. The personId is preferred over nameId; a person may have multiple nameIds (due to marriage, alternate spellings, etc.) but a single personId. Response may include rootId and title fields linking images back to specific programs. URIs in the response are ephemeral; do not store them permanently. Note: the Retrieving Images wiki page indicates token is not required for this endpoint, while the main API page indicates it is required. Behavior may vary; send the token if available.",
         "parameters": [
           {
             "name": "personId",
@@ -1050,6 +1089,7 @@
     },
     "/celebrity/{personId}": {
       "get": {
+        "operationId": "getCelebrity",
         "tags": [
           "Celebrity"
         ],
@@ -1094,6 +1134,7 @@
     },
     "/messages/{messageId}": {
       "delete": {
+        "operationId": "deleteMessage",
         "deprecated": true,
         "tags": [
           "Messages"
@@ -1107,7 +1148,8 @@
             "required": true,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Identifier of the message to dismiss."
           }
         ],
         "responses": {
@@ -1364,6 +1406,10 @@
           "tokenExpires": {
             "type": "integer",
             "description": "UNIX epoch timestamp"
+          },
+          "serverTime": {
+            "type": "integer",
+            "description": "Current server time as UNIX epoch timestamp. Documented in API-20141201.md:228; provided so clients can detect token-expiry approach and verify system clock accuracy. ErrorResponse and TokenResponse already declared this field; StatusResponse propagation gap closed in this revision."
           }
         }
       },
@@ -1407,9 +1453,17 @@
             "type": "string",
             "example": "/20141201/lineups/USA-IL57303-X"
           },
+          "name": {
+            "type": "string",
+            "description": "Lineup display name. Observed in wire on every entry."
+          },
+          "ID": {
+            "type": "string",
+            "description": "Alternate identifier returned in place of `lineup` for entries with isDeleted=true."
+          },
           "isDeleted": {
             "type": "boolean",
-            "description": "Only present if the lineup has been deleted"
+            "description": "True when the lineup has been deleted upstream; the alternate ID field replaces lineup for deleted entries."
           }
         }
       },
@@ -1655,6 +1709,10 @@
           "matchType": {
             "type": "string",
             "description": "Verbose mode: how the channel was matched"
+          },
+          "atscType": {
+            "type": "string",
+            "description": "ATSC version specifier (e.g. '3.0'). Observed in wire on ATSC channel map entries; not documented in API wiki but introduced via SD's upstream feed migration (rkulagow 2023-08-10: https://forums.schedulesdirect.org/viewtopic.php?p=10858)."
           }
         }
       },
@@ -1715,6 +1773,10 @@
           "URL": {
             "type": "string",
             "description": "Station website URL. Present on some stations."
+          },
+          "isRadioStation": {
+            "type": "boolean",
+            "description": "True if the station is a radio-only station. Observed in wire on radio stations."
           }
         }
       },
@@ -1762,10 +1824,7 @@
             "example": "Gracenote"
           },
           "category": {
-            "type": [
-              "string",
-              "null"
-            ],
+            "type": "string",
             "enum": [
               "dark",
               "gray",
@@ -1773,7 +1832,8 @@
               "white",
               null
             ],
-            "description": "Background color category the logo is designed for. May be null for legacy logos."
+            "description": "Background color category the logo is designed for. May be null for legacy logos.",
+            "nullable": true
           },
           "hash": {
             "type": "string",
@@ -1820,16 +1880,9 @@
             "type": "object",
             "properties": {
               "changesRemaining": {
-                "oneOf": [
-                  {
-                    "type": "integer"
-                  },
-                  {
-                    "type": "string"
-                  }
-                ],
-                "description": "Number of lineup changes remaining in the current period",
-                "example": 254
+                "type": "integer",
+                "description": "Number of lineup add/delete operations remaining in the current 24-hour window.",
+                "example": 4
               }
             }
           }
@@ -2106,9 +2159,17 @@
           },
           "hash": {
             "type": "string",
-            "description": "32-character standard MD5 hash (will become mandatory in future API versions)",
+            "description": "32-character standard MD5 hash (hex). Prefer over `md5` (22-char legacy) for change detection. Will become mandatory and `md5` will be removed in a future API version (rkulagow 2023-09-11: https://forums.schedulesdirect.org/viewtopic.php?f=17&t=3282).",
             "minLength": 32,
             "maxLength": 32
+          },
+          "animation": {
+            "type": "string",
+            "description": "Animation classification (e.g. 'Animated', 'Live action/animated'). Observed in wire on animated/hybrid programs."
+          },
+          "holiday": {
+            "type": "string",
+            "description": "Holiday associated with the program (e.g. 'Christmas', 'Halloween', 'Valentine's Day'). Observed in wire on holiday-themed programs."
           }
         }
       },
@@ -2260,6 +2321,10 @@
               "totalSeasons": {
                 "type": "integer",
                 "description": "Total number of seasons in the series. SH programs only."
+              },
+              "programVersion": {
+                "type": "string",
+                "description": "Variant designation (e.g. 'English (US) Voice Cast', 'Special Edition'). Observed in wire on programs with multiple variant releases."
               }
             }
           },
@@ -2424,7 +2489,9 @@
             "type": "string"
           },
           "md5": {
-            "type": "string"
+            "type": "string",
+            "minLength": 22,
+            "maxLength": 22
           },
           "titleLanguage": {
             "type": "string",
@@ -2441,6 +2508,12 @@
           "descriptionLanguageName": {
             "type": "string",
             "example": "English"
+          },
+          "hash": {
+            "type": "string",
+            "description": "32-character standard MD5 hash (hex). Prefer over `md5` (22-char legacy) for change detection. Will become mandatory and `md5` will be removed in a future API version (rkulagow 2023-09-11: https://forums.schedulesdirect.org/viewtopic.php?f=17&t=3282).",
+            "minLength": 32,
+            "maxLength": 32
           }
         }
       },
@@ -2536,7 +2609,9 @@
             "description": "Duration in seconds"
           },
           "md5": {
-            "type": "string"
+            "type": "string",
+            "minLength": 22,
+            "maxLength": 22
           },
           "new": {
             "type": "boolean",
@@ -2584,7 +2659,8 @@
                 "hdr",
                 "letterbox",
                 "sdtv",
-                "uhdtv"
+                "uhdtv",
+                "HD 1080i"
               ]
             }
           },
@@ -2594,7 +2670,7 @@
               "$ref": "#/components/schemas/ScheduleRating"
             }
           },
-          "multiPart": {
+          "multipart": {
             "$ref": "#/components/schemas/Multipart"
           },
           "cableInTheClassroom": {
@@ -2639,6 +2715,16 @@
           "free": {
             "type": "boolean",
             "description": "Normally paid content available free in this instance"
+          },
+          "SAPLanguage": {
+            "type": "string",
+            "description": "Language of the Second Audio Program when the broadcast carries a dual-language audio feed. Presence of this field on a scheduled program signals a dual-language source."
+          },
+          "hash": {
+            "type": "string",
+            "description": "32-character standard MD5 hash (hex). Prefer over `md5` (22-char legacy) for change detection. Will become mandatory and `md5` will be removed in a future API version (rkulagow 2023-09-11: https://forums.schedulesdirect.org/viewtopic.php?f=17&t=3282).",
+            "minLength": 32,
+            "maxLength": 32
           }
         }
       },
@@ -2652,6 +2738,10 @@
           "code": {
             "type": "string",
             "example": "TVPG"
+          },
+          "subRating": {
+            "type": "string",
+            "description": "Subclassification on per-airing ratings (extends body/code with content-warning sub-axis). Pipe-separated values, e.g. 'Language|Dialog'. Observed in wire."
           }
         }
       },
@@ -2663,7 +2753,9 @@
             "format": "date-time"
           },
           "md5": {
-            "type": "string"
+            "type": "string",
+            "minLength": 22,
+            "maxLength": 22
           },
           "startDate": {
             "type": "string",
@@ -2680,6 +2772,12 @@
           "modifiedEpoch": {
             "type": "integer",
             "description": "Unix epoch timestamp of last modification. Accompanies modified."
+          },
+          "hash": {
+            "type": "string",
+            "description": "32-character standard MD5 hash (hex). Prefer over `md5` (22-char legacy) for change detection. Will become mandatory and `md5` will be removed in a future API version (rkulagow 2023-09-11: https://forums.schedulesdirect.org/viewtopic.php?f=17&t=3282).",
+            "minLength": 32,
+            "maxLength": 32
           }
         }
       },
@@ -2698,11 +2796,15 @@
           },
           "hash": {
             "type": "string",
-            "description": "32-character forward-compatible change-detection hash. Prefer over md5 for change detection."
+            "description": "32-character standard MD5 hash (hex). Prefer over `md5` (22-char legacy) for change detection. Will become mandatory and `md5` will be removed in a future API version (rkulagow 2023-09-11: https://forums.schedulesdirect.org/viewtopic.php?f=17&t=3282).",
+            "minLength": 32,
+            "maxLength": 32
           },
           "md5": {
             "type": "string",
-            "description": "22-character base64 legacy hash."
+            "description": "22-character base64 legacy hash.",
+            "minLength": 22,
+            "maxLength": 22
           }
         }
       },
@@ -2765,16 +2867,24 @@
         "description": "Image metadata returned from the program image index endpoints. Width/height may be integers (newer responses) or stringified integers (legacy responses).",
         "properties": {
           "width": {
-            "type": [
-              "integer",
-              "string"
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
             ],
             "description": "Image width in pixels. May be integer or stringified integer."
           },
           "height": {
-            "type": [
-              "integer",
-              "string"
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
             ],
             "description": "Image height in pixels. May be integer or stringified integer."
           },
@@ -2865,15 +2975,29 @@
       },
       "CelebrityImage": {
         "type": "object",
-        "description": "Image object returned by GET /metadata/celebrity/{personId}. Note: uses 'lastUpdated' (with 'd'). The embedded images array in GET /celebrity/{personId} uses 'lastUpdate' (without 'd') \u00e2\u20ac\u201d see CelebrityDetailImage.",
+        "description": "Image object returned by GET /metadata/celebrity/{personId}. Note: uses 'lastUpdated' (with 'd'). The embedded images array in GET /celebrity/{personId} uses 'lastUpdate' (without 'd'); see CelebrityDetailImage.",
         "properties": {
           "width": {
-            "type": "string",
-            "description": "Stringified integer"
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Image width in pixels. May be integer or stringified integer (legacy responses)."
           },
           "height": {
-            "type": "string",
-            "description": "Stringified integer"
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "description": "Image height in pixels. May be integer or stringified integer (legacy responses)."
           },
           "uri": {
             "type": "string",
@@ -2979,23 +3103,17 @@
             "format": "date"
           },
           "deathDate": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date"
+            "type": "string",
+            "format": "date",
+            "nullable": true
           },
           "deathPlace": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "deathCause": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "names": {
             "type": "array",
@@ -3035,34 +3153,24 @@
             "type": "string"
           },
           "middleName": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "lastName": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "namePrefix": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "nameSuffix": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "nameLanguage": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "nullable": true
           },
           "isPrimary": {
             "type": "boolean"
